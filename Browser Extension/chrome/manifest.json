@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "Fast Native Download Manager",
+  "description": "Intercept downloads and send links to Fast Native Download Manager from Chrome.",
+  "version": "0.3.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1zayZoKdjKdSaDyp1DjlKMJ5epU7jezdVDYx+Otnf8ESSXufPL1p0rjyHsP/g3896HqjTBgBynWlIMQsWnHsQoItEQthdcNFw6zgCPF7j+Q3EdRLpc2UsCdnAOL3GISP5CajVatcSuWVTHl7EcJZGxlg3koKdql0OUwCzHigb8rivhTvPl3CdkEH1ah9DaQAvFF791+WUV+DaSpvwZxYy2boFRCc276GdO7W3tCKLhhConqr31z56qW0Vdw5u6hWcdkj1XeFXaFLFHyB0BKbaRfu5wzcGOVZ9BzDQKRHmvnKpxcFln6p52vx0RbWTVJHeNDtG6hTDPxo7g2M2VCu5wIDAQAB",
+  "permissions": [
+    "contextMenus",
+    "cookies",
+    "downloads",
+    "notifications",
+    "activeTab",
+    "scripting",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "http://127.0.0.1:51237/*",
+    "http://localhost:51237/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Fast Native Download Manager",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "minimum_chrome_version": "114"
+}

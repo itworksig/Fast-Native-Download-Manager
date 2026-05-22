@@ -1,0 +1,9 @@
+{
+  "name": "dev.codex.fast_native_download_manager",
+  "description": "Fast Native Download Manager Chrome native messaging host",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://mgckldohdfcpmlamgmejjbbnmlckpnho/"
+  ]
+}
