@@ -220,6 +220,7 @@ struct SiteDownloadPreset: Sendable {
 private struct RuntimePluginManifest: Codable {
     let id: String
     let name: String
+    let kind: String?
     let protocols: [String]?
     let fileExtensions: [String]?
     let urlPatterns: [String]?
@@ -306,6 +307,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
     static let mediaSubtitleURLHeaderKey = "X-FNDM-Media-Subtitle-URL"
     static let ytdlpFormatHeaderKey = "X-FNDM-YTDLP-Format"
     static let sitePresetHeaderKey = "X-FNDM-Site-Preset"
+    static let pluginIDHeaderKey = "X-FNDM-Plugin-ID"
     @Published var maximumConcurrentDownloads = max(1, min(16, UserDefaults.standard.object(forKey: "Options.maximumConcurrentDownloads") as? Int ?? 2)) {
         didSet {
             UserDefaults.standard.set(maximumConcurrentDownloads, forKey: "Options.maximumConcurrentDownloads")
@@ -743,7 +745,16 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
                 return
             }
 
-            if (engine == .automatic || engine == .ytdlp), let plugin = pluginEngine(for: effectiveSourceURL) {
+            if let pluginID = item.headers[Self.pluginIDHeaderKey]?.nilIfEmpty,
+               let plugin = pluginEngine(id: pluginID) {
+                appendLog(item, "Dispatching to manually selected plugin \(plugin.name).")
+                try await runPluginEngine(plugin, item: item, sourceURL: effectiveSourceURL)
+                return
+            }
+
+            if (engine == .automatic || engine == .ytdlp),
+               item.headers[Self.sitePresetHeaderKey]?.nilIfEmpty != nil,
+               let plugin = pluginEngine(for: effectiveSourceURL) {
                 appendLog(item, "Dispatching to plugin engine \(plugin.name).")
                 try await runPluginEngine(plugin, item: item, sourceURL: effectiveSourceURL)
                 return
@@ -1174,23 +1185,49 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         return nil
     }
 
+    private func pluginEngine(id pluginID: String) -> RuntimePluginManifest? {
+        let pluginFolder = Self.pluginDirectory()
+        let disabledIDs = Set(UserDefaults.standard.stringArray(forKey: "Plugins.disabledIDs") ?? [])
+        let trustedIDs = Set(UserDefaults.standard.stringArray(forKey: "Plugins.trustedIDs") ?? [])
+        let folders = (try? FileManager.default.contentsOfDirectory(at: pluginFolder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
+        for folder in folders {
+            let manifestURL = folder.appendingPathComponent("plugin.json")
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder().decode(RuntimePluginManifest.self, from: data),
+                  manifest.id == pluginID,
+                  !disabledIDs.contains(manifest.id),
+                  trustedIDs.contains(manifest.id) || manifest.id.hasPrefix("builtin."),
+                  manifest.engineCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                continue
+            }
+            return manifest
+        }
+        return nil
+    }
+
     private func plugin(_ manifest: RuntimePluginManifest, matches sourceURL: URL) -> Bool {
         let ext = sourceURL.pathExtension.lowercased()
         let scheme = sourceURL.scheme?.lowercased() ?? ""
         let urlString = sourceURL.absoluteString.lowercased()
-        if manifest.protocols?.map({ $0.lowercased() }).contains(scheme) == true {
+
+        let patternMatches = (manifest.urlPatterns ?? []).contains {
+            Self.urlString(urlString, host: sourceURL.host?.lowercased(), matchesPluginPattern: $0)
+        }
+
+        if manifest.kind?.lowercased() == "extractor" {
+            return patternMatches
+        }
+
+        if scheme != "http", scheme != "https",
+           manifest.protocols?.map({ $0.lowercased() }).contains(scheme) == true {
             return true
         }
+
         if !ext.isEmpty, manifest.fileExtensions?.map({ $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) }).contains(ext) == true {
             return true
         }
-        for pattern in manifest.urlPatterns ?? [] {
-            let lowered = pattern.lowercased()
-            if lowered == urlString || (lowered.hasSuffix("*") && urlString.hasPrefix(String(lowered.dropLast()))) {
-                return true
-            }
-        }
-        return false
+
+        return patternMatches
     }
 
     private func runPluginEngine(_ plugin: RuntimePluginManifest, item: DownloadItem, sourceURL: URL) async throws {
@@ -1870,6 +1907,14 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     func appendLog(_ item: DownloadItem, _ message: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self, weak item] in
+                guard let self, let item else { return }
+                self.appendLog(item, message)
+            }
+            return
+        }
+
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         let line = "[\(formatter.string(from: Date()))] \(message)"
@@ -2516,6 +2561,14 @@ extension DownloadManager {
             return SiteDownloadPreset(name: "Instagram", engine: .ytdlp, ytdlpFormat: "bv*+ba/b")
         }
         return nil
+    }
+
+    static func urlString(_ urlString: String, host: String?, matchesPluginPattern pattern: String) -> Bool {
+        let lowered = pattern.lowercased()
+        let regex = "^" + NSRegularExpression
+            .escapedPattern(for: lowered)
+            .replacingOccurrences(of: "\\*", with: ".*") + "$"
+        return urlString.range(of: regex, options: [.regularExpression]) != nil
     }
 
     static func loggableHeaders(_ headers: [String: String]) -> String {

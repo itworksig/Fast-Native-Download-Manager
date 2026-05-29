@@ -451,7 +451,7 @@ private enum DefaultPluginInstaller {
               "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
               "permissions": ["site-extractor", "cookies", "external-engine", "filesystem-write"],
               "allowedCommands": ["yt-dlp"],
-              "protocols": ["https"],
+              "protocols": [],
               "fileExtensions": [],
               "urlPatterns": [\(escapedPatterns)],
               "engineCommand": "yt-dlp --newline --progress --merge-output-format mp4 --restrict-filenames --no-part ${FNDM_COOKIES_FILE:+--cookies \\\"$FNDM_COOKIES_FILE\\\"} ${FNDM_COOKIES_FROM_BROWSER:+--cookies-from-browser \\\"$FNDM_COOKIES_FROM_BROWSER\\\"} -f \\\"${FNDM_FORMAT:-\(format)}\\\" -o \\\"${FNDM_OUTPUT_DIR}/%(title).200B.%(ext)s\\\" \\\"${FNDM_URL}\\\"",
@@ -663,7 +663,7 @@ private final class PluginManager: ObservableObject {
               "entry": "main.js",
               "permissions": ["sniff", "download-request"],
               "allowedCommands": ["yt-dlp"],
-              "protocols": ["https"],
+              "protocols": [],
               "fileExtensions": ["mp4", "m3u8", "mpd"],
               "urlPatterns": ["https://example.com/*"],
               "engineCommand": "yt-dlp",
@@ -922,18 +922,13 @@ private enum PluginExtractorRunner {
     private static func pluginMatches(_ manifest: PluginManifest, url: URL) -> Bool {
         let scheme = url.scheme?.lowercased() ?? ""
         let urlString = url.absoluteString.lowercased()
-        if manifest.protocols?.map({ $0.lowercased() }).contains(scheme) == true {
+        if scheme != "http", scheme != "https",
+           manifest.protocols?.map({ $0.lowercased() }).contains(scheme) == true {
             return true
         }
         for pattern in manifest.urlPatterns ?? [] {
-            let lower = pattern.lowercased()
-            if lower == urlString { return true }
-            if lower.hasSuffix("*"), urlString.hasPrefix(String(lower.dropLast())) { return true }
-            if lower.hasPrefix("https://*."), let host = url.host?.lowercased() {
-                let suffix = lower.dropFirst("https://*.".count).dropLast(lower.hasSuffix("*") ? 1 : 0)
-                if host.hasSuffix(String(suffix).trimmingCharacters(in: CharacterSet(charactersIn: "/"))) {
-                    return true
-                }
+            if DownloadManager.urlString(urlString, host: url.host?.lowercased(), matchesPluginPattern: pattern) {
+                return true
             }
         }
         return false
@@ -1106,6 +1101,12 @@ private struct DownloadConfirmationResult {
     let cookie: String?
     let engine: DownloadEngineChoice
     let startImmediately: Bool
+}
+
+private struct PluginPickerOption: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let kind: String
 }
 
 private struct MainWindow: View {
@@ -2281,7 +2282,7 @@ private struct OptionsPanel: View {
             Section("Capture") {
                 Toggle("Enable browser integration bridge", isOn: $browserBridgeEnabled)
                 Toggle("Monitor clipboard for downloadable links", isOn: $clipboardMonitoringEnabled)
-                Text("The Chrome extension sends links to the local bridge on 127.0.0.1:51237.")
+                Text("The Chrome and Firefox extensions send links to the local bridge on 127.0.0.1:51237.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -2293,6 +2294,9 @@ private struct OptionsPanel: View {
                     Spacer()
                     Button("Open Chrome Extensions") {
                         NSWorkspace.shared.open(URL(string: "chrome://extensions")!)
+                    }
+                    Button("Open Firefox Add-ons") {
+                        NSWorkspace.shared.open(URL(string: "about:debugging#/runtime/this-firefox")!)
                     }
                 }
             }
@@ -3684,6 +3688,8 @@ private struct AddDownloadSheet: View {
     @State private var size = "--"
     @State private var category: Category = .all
     @State private var engine: DownloadEngineChoice = .automatic
+    @State private var selectedPluginID = ""
+    @State private var pluginOptions: [PluginPickerOption] = []
     @State private var saveDirectory = DownloadManager.downloadDirectory()
     @State private var startImmediately = true
     @State private var isChecking = false
@@ -3763,6 +3769,21 @@ private struct AddDownloadSheet: View {
                     .frame(width: 360)
                 }
                 GridRow {
+                    fieldLabel("Plugin")
+                    Picker("", selection: $selectedPluginID) {
+                        Text("Auto by URL").tag("")
+                        Divider()
+                        ForEach(pluginOptions) { plugin in
+                            Text("\(plugin.name) · \(plugin.kind)").tag(plugin.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 300)
+                    Text(selectedPluginID.isEmpty ? "Strict URL match" : "Manual override")
+                        .font(.caption)
+                        .foregroundStyle(selectedPluginID.isEmpty ? Color.secondary : Color.orange)
+                }
+                GridRow {
                     fieldLabel("Save to")
                     HStack(spacing: 8) {
                         Text(saveDirectory.path)
@@ -3808,12 +3829,18 @@ private struct AddDownloadSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button(startImmediately ? "Start Download" : "Add to Queue") {
+                    var headers = request.headers
+                    if selectedPluginID.isEmpty {
+                        headers.removeValue(forKey: DownloadManager.pluginIDHeaderKey)
+                    } else {
+                        headers[DownloadManager.pluginIDHeaderKey] = selectedPluginID
+                    }
                     onAdd(DownloadConfirmationResult(
                         url: url,
                         fileName: fileName,
                         category: category,
                         saveDirectory: saveDirectory,
-                        headers: request.headers,
+                        headers: headers,
                         cookie: request.cookie,
                         engine: engine,
                         startImmediately: startImmediately
@@ -3827,6 +3854,7 @@ private struct AddDownloadSheet: View {
         .padding(22)
         .frame(width: 680)
         .onAppear {
+            pluginOptions = loadPluginOptions()
             if !request.url.isEmpty {
                 Task { await refreshMetadata(for: request.url) }
             }
@@ -3888,10 +3916,40 @@ private struct AddDownloadSheet: View {
                 engine = preset.engine
                 sitePresetMessage = "\(preset.name) preset: best quality, cookies, naming, and merge handled by yt-dlp."
             } else {
+                if engine == .automatic || engine == .ytdlp {
+                    engine = AppPreferences.defaultEngine
+                }
                 sitePresetMessage = nil
             }
             metadataMessage = draft.errorMessage.map { "Size check unavailable: \($0)" }
         }
+    }
+
+    private func loadPluginOptions() -> [PluginPickerOption] {
+        let disabled = Set(UserDefaults.standard.stringArray(forKey: AppPreferences.disabledPluginsKey) ?? [])
+        let trusted = Set(UserDefaults.standard.stringArray(forKey: AppPreferences.trustedPluginsKey) ?? [])
+        let folders = (try? FileManager.default.contentsOfDirectory(
+            at: AppPreferences.pluginsDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        return folders.compactMap { folder in
+            let manifestURL = folder.appendingPathComponent("plugin.json")
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder().decode(PluginManifest.self, from: data),
+                  !disabled.contains(manifest.id),
+                  trusted.contains(manifest.id) || manifest.entry == "builtin",
+                  manifest.engineCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                return nil
+            }
+            return PluginPickerOption(
+                id: manifest.id,
+                name: manifest.name,
+                kind: manifest.kind?.capitalized ?? "Plugin"
+            )
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func chooseSaveDirectory() {
