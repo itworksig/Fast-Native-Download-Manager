@@ -43,36 +43,6 @@ menuAPI.onClicked.addListener(async (info, tab) => {
   }));
 });
 
-api.browserAction.onClicked.addListener(async (tab) => {
-  if (!tab?.id) {
-    return;
-  }
-
-  try {
-    await requestAppExtractors(tab.url, tab.title);
-
-    const platformResource = await platformPageResource(tab);
-    if (platformResource) {
-      await sendResources([platformResource]);
-      return;
-    }
-
-    const results = await api.tabs.executeScript(tab.id, {
-      code: `(${scanPageForDownloadableResources.toString()})();`
-    });
-    const urls = Array.isArray(results?.[0]) ? results[0] : [];
-    const resources = await Promise.all(urls.filter(isDownloadableUrl).map((url) => buildResource(url, {
-      referer: tab.url,
-      source: "page-scan",
-      tabId: tab.id
-    })));
-    await sendResources(resources.filter(Boolean));
-  } catch (error) {
-    console.error("Grabber page scan failed:", error);
-    notify("Grabber scan failed", error.message || "Unable to scan this page.");
-  }
-});
-
 api.downloads.onCreated.addListener((downloadItem) => {
   if (!isHttpUrl(downloadItem.url) || sentDownloadIds.has(downloadItem.id)) {
     return;
@@ -90,6 +60,15 @@ api.downloads.onCreated.addListener((downloadItem) => {
 });
 
 api.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === "fndm-scan-tab") {
+    return tabFromMessage(message).then(scanTabForResources).then((resources) => {
+      return { ok: true, resources };
+    }).catch((error) => {
+      console.error("Grabber page scan failed:", error);
+      return { ok: false, error: error.message || "Unable to scan this page.", resources: [] };
+    });
+  }
+
   if (message?.type === "fndm-download-resource" && message.resource?.url) {
     return sendToLocalApp(resourceToDownloadRequest(message.resource)).then(() => {
       return { ok: true };
@@ -99,11 +78,23 @@ api.runtime.onMessage.addListener((message, sender) => {
   }
 
   if (message?.type === "fndm-get-resources") {
-    const tabId = sender.tab?.id;
+    const tabId = typeof message.tabId === "number" ? message.tabId : sender.tab?.id;
     return Promise.resolve({ resources: tabId == null ? [] : resourcesByTabId.get(tabId) || [] });
   }
 
   return false;
+});
+
+api.tabs.onRemoved?.addListener((tabId) => {
+  resourcesByTabId.delete(tabId);
+  updateBrowserActionBadge(tabId);
+});
+
+api.tabs.onUpdated?.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    resourcesByTabId.delete(tabId);
+    updateBrowserActionBadge(tabId);
+  }
 });
 
 api.webRequest.onHeadersReceived.addListener(
@@ -232,33 +223,74 @@ async function platformPageResource(tab) {
 }
 
 async function sendResources(resources) {
-  const freshResources = resources.filter((resource) => resource && !sentResourceUrls.has(resource.url));
-  if (freshResources.length === 0) {
+  const validResources = resources.filter(Boolean);
+  if (validResources.length === 0) {
     return;
   }
 
-  freshResources.forEach((resource) => sentResourceUrls.add(resource.url));
-  if (sentResourceUrls.size > 500) {
-    sentResourceUrls.clear();
-  }
+  const freshResources = validResources.filter((resource) => !sentResourceUrls.has(resource.url));
 
-  try {
-    const response = await fetch(RESOURCES_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-FNDM-Source": "firefox-extension"
-      },
-      body: JSON.stringify(freshResources)
-    });
-    if (!response.ok) {
-      throw new Error(`Local bridge returned HTTP ${response.status}`);
+  if (freshResources.length > 0) {
+    freshResources.forEach((resource) => sentResourceUrls.add(resource.url));
+    if (sentResourceUrls.size > 500) {
+      sentResourceUrls.clear();
     }
-  } catch (error) {
-    console.error("Fast Native Download Manager resource bridge error:", error);
+
+    try {
+      const response = await fetch(RESOURCES_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-FNDM-Source": "firefox-extension"
+        },
+        body: JSON.stringify(freshResources)
+      });
+      if (!response.ok) {
+        throw new Error(`Local bridge returned HTTP ${response.status}`);
+      }
+    } catch (error) {
+      console.error("Fast Native Download Manager resource bridge error:", error);
+    }
   }
 
-  publishResourcesToTabs(freshResources);
+  publishResourcesToTabs(validResources);
+}
+
+async function tabFromMessage(message) {
+  if (typeof message.tabId === "number") {
+    return api.tabs.get(message.tabId);
+  }
+  const tabs = await api.tabs.query({ active: true, currentWindow: true });
+  if (tabs[0]) {
+    return tabs[0];
+  }
+  throw new Error("No active tab found.");
+}
+
+async function scanTabForResources(tab) {
+  if (!tab?.id) {
+    return [];
+  }
+
+  await requestAppExtractors(tab.url, tab.title);
+
+  const platformResource = await platformPageResource(tab);
+  if (platformResource) {
+    await sendResources([platformResource]);
+    return resourcesByTabId.get(tab.id) || [stripInternalResourceFields(platformResource)];
+  }
+
+  const results = await api.tabs.executeScript(tab.id, {
+    code: `(${scanPageForDownloadableResources.toString()})();`
+  });
+  const urls = Array.isArray(results?.[0]) ? results[0] : [];
+  const resources = await Promise.all(urls.filter(isDownloadableUrl).map((url) => buildResource(url, {
+    referer: tab.url,
+    source: "page-scan",
+    tabId: tab.id
+  })));
+  await sendResources(resources.filter(Boolean));
+  return resourcesByTabId.get(tab.id) || [];
 }
 
 async function requestAppExtractors(pageUrl, title = "") {
@@ -302,8 +334,20 @@ function publishResourcesToTabs(resources) {
     }
     const list = Array.from(merged.values()).slice(-50);
     resourcesByTabId.set(tabId, list);
+    updateBrowserActionBadge(tabId, list.length);
     api.tabs.sendMessage(tabId, { type: "fndm-resources-detected", resources: list }).catch(() => {});
   }
+}
+
+function updateBrowserActionBadge(tabId, count = 0) {
+  api.browserAction.setBadgeText({
+    tabId,
+    text: count > 0 ? String(Math.min(count, 99)) : ""
+  }).catch(() => {});
+  api.browserAction.setBadgeBackgroundColor({
+    tabId,
+    color: "#007aff"
+  }).catch(() => {});
 }
 
 function stripInternalResourceFields(resource) {
@@ -317,7 +361,7 @@ function resourceToDownloadRequest(resource) {
     fileName: resource.fileName || resource.title || fileNameFromUrl(resource.url),
     headers: resource.headers || { "User-Agent": navigator.userAgent },
     cookie: resource.cookie || "",
-    source: "grabber-overlay"
+    source: "firefox-popup"
   };
 }
 

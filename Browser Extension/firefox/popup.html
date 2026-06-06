@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fast Native Download Manager</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="header">
+      <div>
+        <h1>Downloads</h1>
+        <p id="status">Looking for resources...</p>
+      </div>
+      <button id="scan" class="icon-button" type="button" title="Scan this page" aria-label="Scan this page">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+          <path d="M21 3v6h-6"></path>
+        </svg>
+      </button>
+    </header>
+
+    <section id="empty" class="empty" hidden>
+      <strong>No resources yet</strong>
+      <span>Open a media or file page, then scan again.</span>
+    </section>
+
+    <section id="list" class="resource-list" aria-label="Detected resources"></section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

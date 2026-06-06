@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "Fast Native Download Manager",
   "description": "Intercept downloads and send links to Fast Native Download Manager from Firefox.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "permissions": [
     "activeTab",
     "contextMenus",
@@ -37,6 +37,7 @@
   ],
   "browser_action": {
     "default_title": "Fast Native Download Manager",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icon-16.png",
       "32": "icon-32.png",

@@ -10,7 +10,7 @@ It sends links and detected resources to the local app bridge:
 
 - Right-click menu: `Download with Fast Native Download Manager`
 - Automatic handoff for normal Firefox download links
-- Page grabber button: `Download N`
+- Toolbar popup grabber with resource count badge
 - Resource sniffing for media, archives, app packages, torrents, eD2K, HLS, and DASH
 - Site preset handoff for YouTube, Bilibili, Vimeo, X, Instagram, TikTok, Facebook, Twitch, Dailymotion, Reddit, SoundCloud, Pinterest, LinkedIn, and IMDb
 - Sends cookies, Referer, Origin, User-Agent, file name hints, and engine hints to the app
