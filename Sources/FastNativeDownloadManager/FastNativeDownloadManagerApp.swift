@@ -1092,6 +1092,72 @@ private struct DownloadConfirmationRequest: Identifiable {
     }
 }
 
+@MainActor
+private enum ExternalDownloadRequestCenter {
+    private static var pendingRequests: [BrowserDownloadRequest] = []
+    private static var confirmationWindowController: DownloadConfirmationWindowController?
+    private static var detailWindowController: DownloadDetailWindowController?
+
+    static func submit(_ request: BrowserDownloadRequest) {
+        showDownloadConfirmation(for: request)
+    }
+
+    static func consumeRequests() -> [BrowserDownloadRequest] {
+        let requests = pendingRequests
+        pendingRequests.removeAll()
+        return requests
+    }
+
+    private static func showDownloadConfirmation(for request: BrowserDownloadRequest) {
+        let controller = DownloadConfirmationWindowController(
+            request: DownloadConfirmationRequest(
+                url: request.url,
+                fileName: request.fileName,
+                headers: request.headers,
+                cookie: request.cookie
+            ),
+            manager: DownloadManager.shared,
+            onAdd: addConfirmedDownload
+        )
+        confirmationWindowController = controller
+        controller.show()
+        hideMainWindow(except: controller.window)
+    }
+
+    private static func addConfirmedDownload(_ result: DownloadConfirmationResult) {
+        guard let item = DownloadManager.shared.addDownload(
+            from: result.url,
+            fileName: result.fileName,
+            category: result.category,
+            saveDirectory: result.saveDirectory,
+            headers: result.headers,
+            cookie: result.cookie,
+            engine: result.engine,
+            startImmediately: result.startImmediately
+        ) else {
+            return
+        }
+
+        if result.startImmediately {
+            let controller = DownloadDetailWindowController(
+                download: item,
+                onResume: { DownloadManager.shared.start(item) },
+                onPause: { DownloadManager.shared.pause(item) },
+                onCancel: { DownloadManager.shared.cancel(item) },
+                onSaveSettings: { DownloadManager.shared.saveTaskSettings(item) }
+            )
+            detailWindowController = controller
+            controller.show()
+        }
+    }
+
+    private static func hideMainWindow(except confirmationWindow: NSWindow?) {
+        for window in NSApp.windows where window !== confirmationWindow && window.title == "Fast Native Download Manager" {
+            window.orderOut(nil)
+        }
+    }
+}
+
 private struct DownloadConfirmationResult {
     let url: String
     let fileName: String
@@ -1110,11 +1176,12 @@ private struct PluginPickerOption: Identifiable, Hashable {
 }
 
 private struct MainWindow: View {
-    @StateObject private var manager = DownloadManager()
+    @StateObject private var manager = DownloadManager.shared
     @State private var selectedCategory: Category = .all
     @State private var selectedDownloadID: DownloadItem.ID?
     @State private var developmentMessage: String?
     @State private var detailWindowController: DownloadDetailWindowController?
+    @State private var externalDownloadWindowController: DownloadConfirmationWindowController?
     @State private var downloadConfirmationRequest: DownloadConfirmationRequest?
     @State private var pendingClipboardURL: String?
     @State private var lastPasteboardChangeCount = NSPasteboard.general.changeCount
@@ -1289,6 +1356,7 @@ private struct MainWindow: View {
         }
         .onAppear {
             selectedDownloadID = manager.downloads.first?.id
+            consumePendingExternalDownloadRequests()
         }
         .onReceive(NotificationCenter.default.publisher(for: .showAddDownloadSheet)) { _ in
             requestDownloadConfirmation("")
@@ -1306,9 +1374,8 @@ private struct MainWindow: View {
             handleExternalDownloadRequest(url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .externalRawDownloadRequested)) { notification in
-            if let request = notification.object as? BrowserDownloadRequest {
-                startExternalDownload(request)
-            } else if let rawURL = notification.object as? String {
+            consumePendingExternalDownloadRequests()
+            if let rawURL = notification.object as? String {
                 startExternalDownload(BrowserDownloadRequest(url: rawURL))
             }
         }
@@ -1620,27 +1687,26 @@ private struct MainWindow: View {
         }
     }
 
-    private func startExternalDownload(_ request: BrowserDownloadRequest) {
-        if showDownloadConfirmation {
-            requestDownloadConfirmation(request)
-            return
+    private func consumePendingExternalDownloadRequests() {
+        for request in ExternalDownloadRequestCenter.consumeRequests() {
+            startExternalDownload(request)
         }
+    }
 
-        let hintedEngine = request.headers[DownloadManager.engineHeaderKey].flatMap(DownloadEngineChoice.init(rawValue:)) ?? AppPreferences.defaultEngine
-        guard let item = manager.addDownload(
-            from: request.url,
-            fileName: request.fileName,
-            headers: request.headers,
-            cookie: request.cookie,
-            engine: hintedEngine,
-            startImmediately: true
-        ) else {
-            showInDevelopment("这个链接暂时不能下载：\(request.url)")
-            return
-        }
-        selectedDownloadID = item.id
-        selectedCategory = .all
-        showDetails(for: item)
+    private func startExternalDownload(_ request: BrowserDownloadRequest) {
+        let controller = DownloadConfirmationWindowController(
+            request: DownloadConfirmationRequest(
+                url: request.url,
+                fileName: request.fileName,
+                headers: request.headers,
+                cookie: request.cookie
+            ),
+            manager: manager,
+            onAdd: addConfirmedDownload
+        )
+        externalDownloadWindowController = controller
+        controller.show()
+        hideMainWindowBehindExternalConfirmation(except: controller.window)
     }
 
     private func checkScheduler() {
@@ -1696,8 +1762,22 @@ private struct MainWindow: View {
     }
 
     private func bringAppToFront() {
+        NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        guard let window = NSApp.windows.first(where: { $0.canBecomeKey && !$0.isMiniaturized }) ?? NSApp.windows.first(where: { $0.canBecomeKey }) else {
+            return
+        }
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+
+    private func hideMainWindowBehindExternalConfirmation(except confirmationWindow: NSWindow?) {
+        for window in NSApp.windows where window !== confirmationWindow && window.title == "Fast Native Download Manager" {
+            window.orderOut(nil)
+        }
     }
 
     private func mergeSniffedResources(_ resources: [SniffedResource]) {
@@ -1901,8 +1981,9 @@ private final class LocalBrowserBridge: @unchecked Sendable {
         }
 
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .externalRawDownloadRequested, object: downloadRequest)
-            NSApp.activate()
+            ExternalDownloadRequestCenter.submit(downloadRequest)
+            NSApp.unhide(nil)
+            NSApp.activate(ignoringOtherApps: true)
         }
         return ("200 OK", "{\"ok\":true}")
     }
@@ -2023,7 +2104,52 @@ private final class DownloadDetailWindowController: NSWindowController, NSWindow
     func show() {
         window?.center()
         window?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+private final class DownloadConfirmationWindowController: NSWindowController, NSWindowDelegate {
+    init(
+        request: DownloadConfirmationRequest,
+        manager: DownloadManager,
+        onAdd: @escaping (DownloadConfirmationResult) -> Void
+    ) {
+        let window = NSPanel()
+        window.title = "Download File Info"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.isFloatingPanel = true
+        window.hidesOnDeactivate = false
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let hostingController = NSHostingController(
+            rootView: AddDownloadSheet(
+                request: request,
+                manager: manager,
+                onAdd: onAdd,
+                onCancel: { [weak window] in window?.close() }
+            )
+        )
+        window.contentViewController = hostingController
+        window.setContentSize(NSSize(width: 720, height: 510))
+        window.minSize = NSSize(width: 680, height: 460)
+        super.init(window: window)
+        window.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func show() {
+        window?.center()
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
     }
 }
 
@@ -3682,6 +3808,7 @@ private struct AddDownloadSheet: View {
     let request: DownloadConfirmationRequest
     @ObservedObject var manager: DownloadManager
     let onAdd: (DownloadConfirmationResult) -> Void
+    let onCancel: () -> Void
 
     @State private var url: String
     @State private var fileName = "download"
@@ -3696,10 +3823,16 @@ private struct AddDownloadSheet: View {
     @State private var metadataMessage: String?
     @State private var sitePresetMessage: String?
 
-    init(request: DownloadConfirmationRequest, manager: DownloadManager, onAdd: @escaping (DownloadConfirmationResult) -> Void) {
+    init(
+        request: DownloadConfirmationRequest,
+        manager: DownloadManager,
+        onAdd: @escaping (DownloadConfirmationResult) -> Void,
+        onCancel: @escaping () -> Void = {}
+    ) {
         self.request = request
         self.manager = manager
         self.onAdd = onAdd
+        self.onCancel = onCancel
         _url = State(initialValue: request.url)
         let suggestedFileName = request.fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
         _fileName = State(initialValue: suggestedFileName?.isEmpty == false ? suggestedFileName! : "download")
@@ -3779,9 +3912,6 @@ private struct AddDownloadSheet: View {
                     }
                     .labelsHidden()
                     .frame(width: 300)
-                    Text(selectedPluginID.isEmpty ? "Strict URL match" : "Manual override")
-                        .font(.caption)
-                        .foregroundStyle(selectedPluginID.isEmpty ? Color.secondary : Color.orange)
                 }
                 GridRow {
                     fieldLabel("Save to")
@@ -3827,7 +3957,10 @@ private struct AddDownloadSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") {
+                    onCancel()
+                    dismiss()
+                }
                 Button(startImmediately ? "Start Download" : "Add to Queue") {
                     var headers = request.headers
                     if selectedPluginID.isEmpty {
@@ -3845,6 +3978,7 @@ private struct AddDownloadSheet: View {
                         engine: engine,
                         startImmediately: startImmediately
                     ))
+                    onCancel()
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)

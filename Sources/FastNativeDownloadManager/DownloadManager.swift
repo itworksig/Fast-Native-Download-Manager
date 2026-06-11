@@ -300,6 +300,8 @@ private enum RuntimePluginSecurityPolicy {
 }
 
 final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
+    static let shared = DownloadManager()
+
     @Published private(set) var downloads: [DownloadItem] = []
     static let engineHeaderKey = "X-FNDM-Engine"
     static let mediaVariantURLHeaderKey = "X-FNDM-Media-Variant-URL"

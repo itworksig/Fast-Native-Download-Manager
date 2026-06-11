@@ -6,12 +6,12 @@
 	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>FastNativeDownloadManager</string>
-	<key>CFBundleIdentifier</key>
-	<string>dev.codex.FastNativeDownloadManager</string>
 	<key>CFBundleIconFile</key>
 	<string>FastNativeDownloadManager.icns</string>
 	<key>CFBundleIconName</key>
 	<string>FastNativeDownloadManager</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.codex.FastNativeDownloadManager</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1.1</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -32,7 +32,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
