@@ -15,12 +15,12 @@ struct FastNativeDownloadManagerApp: App {
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
-                Button("About Fast Native Download Manager") {
+                Button(L.t("About Fast Native Download Manager", "关于 Fast Native Download Manager")) {
                     NotificationCenter.default.post(name: .showAboutPanel, object: nil)
                 }
             }
             CommandGroup(replacing: .newItem) {
-                Button("New Download") {
+                Button(L.t("New Download", "新建下载")) {
                     NotificationCenter.default.post(name: .showAddDownloadSheet, object: nil)
                 }
                 .keyboardShortcut("n")
@@ -44,6 +44,108 @@ private enum BrowserCookieSource: String, CaseIterable, Identifiable {
         switch self {
         case .none: ""
         default: rawValue.lowercased()
+        }
+    }
+}
+
+private enum AppLanguage: String, CaseIterable, Identifiable {
+    case english = "en"
+    case chineseSimplified = "zh-Hans"
+
+    var id: String { rawValue }
+
+    static var defaultRawValue: String {
+        let languages = Locale.preferredLanguages.map { $0.lowercased() }
+        return languages.contains { $0.hasPrefix("zh") } ? chineseSimplified.rawValue : english.rawValue
+    }
+
+    static var current: AppLanguage {
+        let rawValue = UserDefaults.standard.string(forKey: AppPreferences.languageKey) ?? defaultRawValue
+        return AppLanguage(rawValue: rawValue) ?? .english
+    }
+
+    var displayName: String {
+        switch self {
+        case .english: "English"
+        case .chineseSimplified: "简体中文"
+        }
+    }
+}
+
+private enum L {
+    static func t(_ english: String, _ chinese: String) -> String {
+        AppLanguage.current == .chineseSimplified ? chinese : english
+    }
+
+    static func runtime(_ text: String) -> String {
+        guard AppLanguage.current == .chineseSimplified else { return text }
+        if text == "--" { return text }
+        var localized = text
+        let replacements = [
+            "Downloading": "下载中",
+            "Paused": "已暂停",
+            "Complete": "已完成",
+            "Queued": "已排队",
+            "Verifying": "校验中",
+            "Canceled": "已取消",
+            "Failed": "失败",
+            "Ready": "就绪",
+            "Unknown": "未知",
+            "Restored from saved session.": "已从保存的会话恢复。",
+            "Document download": "文档下载",
+            "Video download": "视频下载",
+            "Audio download": "音频下载",
+            "App": "应用",
+            "Compressed archive": "压缩文件",
+            "BitTorrent task": "BitTorrent 任务",
+            "eD2K task": "eD2K 任务",
+            "Captured download": "捕获的下载",
+            "Receiving data...": "正在接收数据...",
+            "Saved to": "已保存到",
+            "Queue: On": "队列：开启",
+            "Queue: Stopped": "队列：已停止",
+            "active": "个活动",
+            "waiting": "个等待",
+            "max": "最大"
+        ]
+        for (english, chinese) in replacements {
+            localized = localized.replacingOccurrences(of: english, with: chinese)
+        }
+        return localized
+    }
+}
+
+private extension DownloadStatus {
+    var localizedTitle: String {
+        switch self {
+        case .downloading: L.t("Downloading", "下载中")
+        case .paused: L.t("Paused", "已暂停")
+        case .complete: L.t("Complete", "已完成")
+        case .queued: L.t("Queued", "已排队")
+        case .verifying: L.t("Verifying", "校验中")
+        case .canceled: L.t("Canceled", "已取消")
+        case .failed: L.t("Failed", "失败")
+        }
+    }
+}
+
+private extension Category {
+    var localizedTitle: String {
+        switch self {
+        case .all: L.t("All Downloads", "所有下载")
+        case .active: L.t("Active", "活动")
+        case .unfinished: L.t("Unfinished", "未完成")
+        case .finished: L.t("Finished", "已完成")
+        case .video: L.t("Video", "视频")
+        case .audio: L.t("Audio", "音频")
+        case .archive: L.t("Archive", "压缩包")
+        case .app: L.t("App", "应用")
+        case .document: L.t("Document", "文档")
+        case .torrent: "BitTorrent"
+        case .ed2k: "eD2K"
+        case .mainDownload: L.t("Main download", "主下载")
+        case .synchronization: L.t("Synchronization", "同步")
+        case .queue3: L.t("Queue # 3", "队列 # 3")
         }
     }
 }
@@ -85,6 +187,7 @@ private final class FastNativeDownloadManagerAppDelegate: NSObject, NSApplicatio
 }
 
 private enum AppPreferences {
+    static let languageKey = "Options.language"
     static let saveDirectoryKey = "Options.saveDirectory"
     static let clipboardMonitoringKey = "Options.clipboardMonitoringEnabled"
     static let browserBridgeKey = "Options.browserBridgeEnabled"
@@ -273,6 +376,110 @@ private struct MarketplacePlugin: Identifiable, Hashable, Codable {
             kind: "extractor",
             permissions: ["site-extractor", "cookies", "external-engine"],
             sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.extractor.cloud-drives",
+            name: "Cloud Drive Extractor",
+            description: "Convert Google Drive, OneDrive, Dropbox, and common cloud-share pages into direct download candidates.",
+            kind: "extractor",
+            permissions: ["site-extractor", "download-request"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.extractor.github-releases",
+            name: "GitHub Release",
+            description: "Find downloadable assets from GitHub release pages and latest-release links.",
+            kind: "extractor",
+            permissions: ["site-extractor", "network"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.extractor.social-media",
+            name: "Reddit/X/Instagram Media",
+            description: "Send Reddit, X, Twitter, and Instagram media pages through yt-dlp with browser-cookie support.",
+            kind: "extractor",
+            permissions: ["site-extractor", "cookies", "external-engine"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.extractor.pan-direct",
+            name: "Cloud Share Direct Link Helper",
+            description: "Normalize common net-disk share URLs into download-first links when the host supports it.",
+            kind: "extractor",
+            permissions: ["site-extractor", "download-request"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.engine.aria2-http",
+            name: "aria2 HTTP Engine",
+            description: "Download HTTP/HTTPS files through aria2c with split connections and resume support.",
+            kind: "engine",
+            permissions: ["external-engine", "filesystem-write"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.engine.rclone",
+            name: "rclone",
+            description: "Use rclone copyurl as an external engine for direct URLs and cloud-backed remotes.",
+            kind: "engine",
+            permissions: ["external-engine", "filesystem-write"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.extractor.s3-r2",
+            name: "S3 / Cloudflare R2",
+            description: "Detect AWS S3 and Cloudflare R2 signed URLs and route them through the single-request S3 engine.",
+            kind: "extractor",
+            permissions: ["site-extractor", "download-request"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.completion.auto-unzip",
+            name: "Auto Unzip",
+            description: "Extract completed ZIP files into a sibling folder after download completion.",
+            kind: "completion",
+            permissions: ["completion-action", "filesystem-write", "external-engine", "shell"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.completion.checksum",
+            name: "Checksum File",
+            description: "Write SHA-256 and MD5 checksum sidecar files for completed downloads.",
+            kind: "completion",
+            permissions: ["completion-action", "filesystem-write", "external-engine", "shell"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.completion.auto-organize",
+            name: "Auto Organize",
+            description: "Move completed files into category folders such as Video, Audio, Archives, Apps, and Documents.",
+            kind: "completion",
+            permissions: ["completion-action", "filesystem-write", "external-engine", "shell"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.completion.virustotal",
+            name: "VirusTotal Lookup",
+            description: "Create a VirusTotal hash lookup link for the completed file without uploading it.",
+            kind: "completion",
+            permissions: ["completion-action", "filesystem-write", "external-engine", "shell"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.extractor.page-debug",
+            name: "Page Resource Debugger",
+            description: "List media, archive, app, and document URLs discovered in the current page source.",
+            kind: "extractor",
+            permissions: ["site-extractor", "network"],
+            sourceURL: nil
+        ),
+        MarketplacePlugin(
+            id: "builtin.extractor.hls-dash",
+            name: "HLS/DASH Quality",
+            description: "Detect HLS and DASH manifests and route them to the ffmpeg media-format workflow.",
+            kind: "extractor",
+            permissions: ["site-extractor", "network", "external-engine"],
+            sourceURL: nil
         )
     ]
 }
@@ -384,6 +591,142 @@ private enum DefaultPluginInstaller {
         installBilibiliExtractorPluginIfNeeded()
         installTikTokExtractorPluginIfNeeded()
         installInstagramExtractorPluginIfNeeded()
+        installExtendedPluginSuiteIfNeeded()
+    }
+
+    static func installExtendedPluginSuiteIfNeeded() {
+        installScriptExtractorPlugin(
+            id: "builtin.extractor.cloud-drives",
+            folderName: "builtin-extractor-cloud-drives",
+            name: "Cloud Drive Extractor",
+            description: "Converts Google Drive, OneDrive, Dropbox, and common cloud-share pages into direct download candidates.",
+            urlPatterns: [
+                "https://drive.google.com/*",
+                "https://docs.google.com/*",
+                "https://*.sharepoint.com/*",
+                "https://1drv.ms/*",
+                "https://onedrive.live.com/*",
+                "https://www.dropbox.com/*",
+                "https://dropbox.com/*"
+            ],
+            scriptName: "cloud-drives.js",
+            script: cloudDriveExtractorScript
+        )
+        installScriptExtractorPlugin(
+            id: "builtin.extractor.github-releases",
+            folderName: "builtin-extractor-github-releases",
+            name: "GitHub Release",
+            description: "Finds downloadable assets from GitHub release pages and latest-release links.",
+            urlPatterns: ["https://github.com/*/*/releases*", "https://github.com/*/*/archive/*"],
+            scriptName: "github-releases.js",
+            script: githubReleaseExtractorScript
+        )
+        installYTDLPSitePlugin(
+            id: "builtin.extractor.social-media",
+            folderName: "builtin-extractor-social-media",
+            name: "Reddit/X/Instagram Media",
+            description: "Enhanced yt-dlp extractor preset for Reddit, X, Twitter, and Instagram media pages.",
+            urlPatterns: [
+                "https://www.reddit.com/*",
+                "https://reddit.com/*",
+                "https://v.redd.it/*",
+                "https://x.com/*",
+                "https://twitter.com/*",
+                "https://www.instagram.com/*",
+                "https://instagram.com/*"
+            ],
+            format: "bv*+ba/b"
+        )
+        installScriptExtractorPlugin(
+            id: "builtin.extractor.pan-direct",
+            folderName: "builtin-extractor-pan-direct",
+            name: "Cloud Share Direct Link Helper",
+            description: "Normalizes common net-disk share URLs into download-first links when the host supports it.",
+            urlPatterns: ["https://*"],
+            scriptName: "pan-direct.js",
+            script: panDirectExtractorScript
+        )
+        installEnginePlugin(
+            id: "builtin.engine.aria2-http",
+            folderName: "builtin-engine-aria2-http",
+            name: "aria2 HTTP Engine",
+            description: "Downloads HTTP/HTTPS files through aria2c with split connections and resume support.",
+            allowedCommands: ["aria2c"],
+            protocols: [],
+            fileExtensions: [],
+            urlPatterns: ["http://*", "https://*"],
+            command: "aria2c --continue=true --allow-overwrite=true --auto-file-renaming=false --max-connection-per-server=${FNDM_CONNECTIONS:-8} --split=${FNDM_CONNECTIONS:-8} --min-split-size=1M --dir \"$FNDM_OUTPUT_DIR\" --out \"$FNDM_FILE\" \"$FNDM_URL\""
+        )
+        installEnginePlugin(
+            id: "builtin.engine.rclone",
+            folderName: "builtin-engine-rclone",
+            name: "rclone",
+            description: "Uses rclone copyurl as an external engine for direct URLs and cloud-backed remotes.",
+            allowedCommands: ["rclone"],
+            protocols: [],
+            fileExtensions: [],
+            urlPatterns: ["http://*", "https://*"],
+            command: "rclone copyurl \"$FNDM_URL\" \"$FNDM_OUTPUT\" --auto-filename=false"
+        )
+        installScriptExtractorPlugin(
+            id: "builtin.extractor.s3-r2",
+            folderName: "builtin-extractor-s3-r2",
+            name: "S3 / Cloudflare R2",
+            description: "Detects AWS S3 and Cloudflare R2 signed URLs and routes them through the single-request S3 engine.",
+            urlPatterns: ["https://*.amazonaws.com/*", "https://*.r2.cloudflarestorage.com/*", "https://*.r2.dev/*"],
+            scriptName: "s3-r2.js",
+            script: s3R2ExtractorScript
+        )
+        installCompletionPlugin(
+            id: "builtin.completion.auto-unzip",
+            folderName: "builtin-completion-auto-unzip",
+            name: "Auto Unzip",
+            description: "Extracts completed ZIP files into a sibling folder.",
+            allowedCommands: ["if"],
+            action: "if [[ \"${FNDM_OUTPUT##*.}\" == \"zip\" ]]; then target=\"${FNDM_OUTPUT%.*}\"; mkdir -p \"$target\"; /usr/bin/ditto -x -k \"$FNDM_OUTPUT\" \"$target\"; fi"
+        )
+        installCompletionPlugin(
+            id: "builtin.completion.checksum",
+            folderName: "builtin-completion-checksum",
+            name: "Checksum File",
+            description: "Writes SHA-256 and MD5 checksum sidecar files for completed downloads.",
+            allowedCommands: ["shasum"],
+            action: "/usr/bin/shasum -a 256 \"$FNDM_OUTPUT\" > \"$FNDM_OUTPUT.sha256\"; /sbin/md5 -r \"$FNDM_OUTPUT\" > \"$FNDM_OUTPUT.md5\""
+        )
+        installCompletionPlugin(
+            id: "builtin.completion.auto-organize",
+            folderName: "builtin-completion-auto-organize",
+            name: "Auto Organize",
+            description: "Moves completed files into category folders such as Video, Audio, Archives, Apps, and Documents.",
+            allowedCommands: ["case"],
+            action: "ext=\"${FNDM_OUTPUT##*.}\"; ext=\"${ext:l}\"; case \"$ext\" in mp4|mkv|mov|webm|avi|m4v) bucket=Video ;; mp3|m4a|flac|wav|aac|ogg) bucket=Audio ;; zip|rar|7z|tar|gz|bz2|xz) bucket=Archives ;; dmg|pkg|app|ipa|apk) bucket=Apps ;; pdf|doc|docx|ppt|pptx|xls|xlsx|txt|md) bucket=Documents ;; *) bucket=Other ;; esac; target=\"$FNDM_OUTPUT_DIR/$bucket\"; mkdir -p \"$target\"; mv -n \"$FNDM_OUTPUT\" \"$target/\""
+        )
+        installCompletionPlugin(
+            id: "builtin.completion.virustotal",
+            folderName: "builtin-completion-virustotal",
+            name: "VirusTotal Lookup",
+            description: "Creates a VirusTotal hash lookup link without uploading the file.",
+            allowedCommands: ["shasum"],
+            action: "hash=$(/usr/bin/shasum -a 256 \"$FNDM_OUTPUT\" | awk '{print $1}'); printf 'https://www.virustotal.com/gui/search/%s\\n' \"$hash\" > \"$FNDM_OUTPUT.virustotal.url\""
+        )
+        installScriptExtractorPlugin(
+            id: "builtin.extractor.page-debug",
+            folderName: "builtin-extractor-page-debug",
+            name: "Page Resource Debugger",
+            description: "Lists media, archive, app, and document URLs discovered in the current page source.",
+            urlPatterns: ["http://*", "https://*"],
+            scriptName: "page-debug.js",
+            script: pageResourceDebugExtractorScript
+        )
+        installScriptExtractorPlugin(
+            id: "builtin.extractor.hls-dash",
+            folderName: "builtin-extractor-hls-dash",
+            name: "HLS/DASH Quality",
+            description: "Detects HLS and DASH manifests and routes them to the ffmpeg media-format workflow.",
+            urlPatterns: ["http://*", "https://*"],
+            scriptName: "hls-dash.js",
+            script: hlsDashExtractorScript
+        )
     }
 
     static func installYouTubeExtractorPluginIfNeeded() {
@@ -430,6 +773,137 @@ private enum DefaultPluginInstaller {
         )
     }
 
+    private static func installScriptExtractorPlugin(
+        id: String,
+        folderName: String,
+        name: String,
+        description: String,
+        urlPatterns: [String],
+        scriptName: String,
+        script: String
+    ) {
+        do {
+            try FileManager.default.createDirectory(at: AppPreferences.pluginsDirectory, withIntermediateDirectories: true)
+            let folder = AppPreferences.pluginsDirectory.appendingPathComponent(folderName, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let manifest = """
+            {
+              "id": "\(id)",
+              "name": "\(name)",
+              "version": "0.1.0",
+              "author": "Fast Native Download Manager",
+              "description": "\(description)",
+              "kind": "extractor",
+              "entry": "\(scriptName)",
+              "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
+              "permissions": ["site-extractor", "network", "download-request", "external-engine"],
+              "allowedCommands": ["node"],
+              "protocols": [],
+              "fileExtensions": [],
+              "urlPatterns": \(jsonArray(urlPatterns)),
+              "engineCommand": "",
+              "extractorScript": "\(scriptName)",
+              "completionAction": "notify"
+            }
+            """
+            try manifest.write(to: folder.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+            try script.write(to: folder.appendingPathComponent(scriptName), atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("Fast Native Download Manager script plugin install failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func installEnginePlugin(
+        id: String,
+        folderName: String,
+        name: String,
+        description: String,
+        allowedCommands: [String],
+        protocols: [String],
+        fileExtensions: [String],
+        urlPatterns: [String],
+        command: String
+    ) {
+        do {
+            try FileManager.default.createDirectory(at: AppPreferences.pluginsDirectory, withIntermediateDirectories: true)
+            let folder = AppPreferences.pluginsDirectory.appendingPathComponent(folderName, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let manifest = """
+            {
+              "id": "\(id)",
+              "name": "\(name)",
+              "version": "0.1.0",
+              "author": "Fast Native Download Manager",
+              "description": "\(description)",
+              "kind": "engine",
+              "entry": "builtin",
+              "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
+              "permissions": ["external-engine", "filesystem-write", "shell"],
+              "allowedCommands": \(jsonArray(allowedCommands)),
+              "protocols": \(jsonArray(protocols)),
+              "fileExtensions": \(jsonArray(fileExtensions)),
+              "urlPatterns": \(jsonArray(urlPatterns)),
+              "engineCommand": \(jsonString(command)),
+              "extractorScript": "",
+              "completionAction": "notify"
+            }
+            """
+            try manifest.write(to: folder.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("Fast Native Download Manager engine plugin install failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func installCompletionPlugin(
+        id: String,
+        folderName: String,
+        name: String,
+        description: String,
+        allowedCommands: [String],
+        action: String
+    ) {
+        do {
+            try FileManager.default.createDirectory(at: AppPreferences.pluginsDirectory, withIntermediateDirectories: true)
+            let folder = AppPreferences.pluginsDirectory.appendingPathComponent(folderName, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let manifest = """
+            {
+              "id": "\(id)",
+              "name": "\(name)",
+              "version": "0.1.0",
+              "author": "Fast Native Download Manager",
+              "description": "\(description)",
+              "kind": "completion",
+              "entry": "builtin",
+              "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
+              "permissions": ["completion-action", "external-engine", "filesystem-write", "shell"],
+              "allowedCommands": \(jsonArray(allowedCommands)),
+              "protocols": [],
+              "fileExtensions": [],
+              "urlPatterns": [],
+              "engineCommand": "",
+              "extractorScript": "",
+              "completionAction": \(jsonString(action))
+            }
+            """
+            try manifest.write(to: folder.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("Fast Native Download Manager completion plugin install failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func jsonArray(_ values: [String]) -> String {
+        "[" + values.map(jsonString).joined(separator: ", ") + "]"
+    }
+
+    private static func jsonString(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        return "\"\(escaped)\""
+    }
+
     private static func installYTDLPSitePlugin(id: String, folderName: String, name: String, description: String, urlPatterns: [String], format: String) {
         let fileManager = FileManager.default
         do {
@@ -464,6 +938,220 @@ private enum DefaultPluginInstaller {
             NSLog("Fast Native Download Manager site plugin install failed: \(error.localizedDescription)")
         }
     }
+
+    private static let cloudDriveExtractorScript = #"""
+    const pageURL = process.env.FNDM_PAGE_URL || process.argv[2] || "";
+    const title = process.env.FNDM_PAGE_TITLE || "Cloud drive file";
+    const resources = [];
+    function hostOf(value) { try { return new URL(value).host; } catch { return ""; } }
+    function fileName(value, fallback) {
+      try {
+        const url = new URL(value);
+        const last = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || "");
+        return (last && last.includes(".")) ? last : fallback;
+      } catch { return fallback; }
+    }
+    function push(url, type, name = title) {
+      resources.push({
+        url,
+        host: hostOf(url),
+        type,
+        title: name,
+        quality: "direct-link helper",
+        size: "--",
+        confidence: 0.92,
+        fileName: fileName(url, name),
+        headers: { "User-Agent": "Fast Native Download Manager Cloud Drive Extractor", "Referer": pageURL },
+        cookie: null
+      });
+    }
+    try {
+      const url = new URL(pageURL);
+      const host = url.host.toLowerCase();
+      if (host.includes("drive.google.com") || host.includes("docs.google.com")) {
+        const match = url.pathname.match(/\/(?:file\/d|document\/d|presentation\/d|spreadsheets\/d)\/([^/]+)/);
+        const id = match?.[1] || url.searchParams.get("id");
+        if (id) push(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`, "GDRIVE", `${title}.download`);
+      } else if (host.includes("dropbox.com")) {
+        url.searchParams.set("dl", "1");
+        push(url.toString(), "DROPBOX");
+      } else if (host.includes("1drv.ms") || host.includes("onedrive.live.com") || host.includes("sharepoint.com")) {
+        url.searchParams.set("download", "1");
+        push(url.toString(), "ONEDRIVE");
+      }
+    } catch {}
+    process.stdout.write(JSON.stringify(resources));
+    """#
+
+    private static let githubReleaseExtractorScript = #"""
+    const pageURL = process.env.FNDM_PAGE_URL || process.argv[2] || "";
+    const resources = [];
+    function push(asset, owner, repo) {
+      resources.push({
+        url: asset.browser_download_url,
+        host: "github.com",
+        type: "GITHUB",
+        title: asset.name,
+        quality: "release asset",
+        size: asset.size ? `${asset.size} bytes` : "--",
+        confidence: 0.98,
+        fileName: asset.name,
+        headers: { "User-Agent": "Fast Native Download Manager GitHub Release Extractor", "Referer": pageURL },
+        cookie: null
+      });
+    }
+    async function main() {
+      try {
+        const url = new URL(pageURL);
+        const parts = url.pathname.split("/").filter(Boolean);
+        if (url.host !== "github.com" || parts.length < 2) return;
+        const [owner, repo] = parts;
+        let api = null;
+        const releaseIndex = parts.indexOf("releases");
+        if (releaseIndex >= 0 && parts[releaseIndex + 1] === "latest") {
+          api = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
+        } else if (releaseIndex >= 0 && parts[releaseIndex + 1] === "tag" && parts[releaseIndex + 2]) {
+          api = `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(parts[releaseIndex + 2])}`;
+        }
+        if (!api) return;
+        const res = await fetch(api, { headers: { "User-Agent": "Fast Native Download Manager" } });
+        if (!res.ok) return;
+        const release = await res.json();
+        for (const asset of release.assets || []) push(asset, owner, repo);
+      } catch {}
+    }
+    main().finally(() => process.stdout.write(JSON.stringify(resources)));
+    """#
+
+    private static let panDirectExtractorScript = #"""
+    const pageURL = process.env.FNDM_PAGE_URL || process.argv[2] || "";
+    const title = process.env.FNDM_PAGE_TITLE || "Cloud share";
+    const resources = [];
+    const supported = ["dropbox.com", "box.com", "mediafire.com", "workdrive", "lanzou", "123pan", "cowtransfer", "wetransfer"];
+    try {
+      const url = new URL(pageURL);
+      const host = url.host.toLowerCase();
+      if (supported.some(value => host.includes(value))) {
+        if (host.includes("dropbox.com")) url.searchParams.set("dl", "1");
+        else if (!url.searchParams.has("download")) url.searchParams.set("download", "1");
+        resources.push({
+          url: url.toString(),
+          host,
+          type: "DIRECT",
+          title,
+          quality: "direct-link helper",
+          size: "--",
+          confidence: 0.74,
+          fileName: title,
+          headers: { "User-Agent": "Fast Native Download Manager Direct Link Helper", "Referer": pageURL },
+          cookie: null
+        });
+      }
+    } catch {}
+    process.stdout.write(JSON.stringify(resources));
+    """#
+
+    private static let s3R2ExtractorScript = #"""
+    const pageURL = process.env.FNDM_PAGE_URL || process.argv[2] || "";
+    const title = process.env.FNDM_PAGE_TITLE || "S3 object";
+    const resources = [];
+    try {
+      const url = new URL(pageURL);
+      const host = url.host.toLowerCase();
+      const names = new Set([...url.searchParams.keys()].map(v => v.toLowerCase()));
+      const looksSigned = names.has("awsaccesskeyid") || names.has("signature") || names.has("x-amz-signature") || names.has("x-amz-credential") || names.has("x-amz-security-token");
+      const looksS3 = host.includes("amazonaws.com") || host.includes("r2.cloudflarestorage.com") || host.endsWith(".r2.dev") || looksSigned;
+      if (looksS3) {
+        const last = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || title);
+        resources.push({
+          url: pageURL,
+          host,
+          type: "S3/R2",
+          title: last,
+          quality: "single request",
+          size: "--",
+          confidence: 0.99,
+          fileName: last,
+          headers: { "X-FNDM-Engine": "Amazon S3", "X-FNDM-Site-Preset": "Amazon S3", "Referer": pageURL },
+          cookie: null
+        });
+      }
+    } catch {}
+    process.stdout.write(JSON.stringify(resources));
+    """#
+
+    private static let pageResourceDebugExtractorScript = #"""
+    const pageURL = process.env.FNDM_PAGE_URL || process.argv[2] || "";
+    const resources = [];
+    const exts = /\.(mp4|mkv|mov|webm|m3u8|mpd|mp3|m4a|flac|zip|rar|7z|dmg|pkg|pdf|pptx?|docx?|xlsx?)(?:[?#][^\s"'<>)]*)?/ig;
+    function absolute(base, value) { try { return new URL(value, base).toString(); } catch { return null; } }
+    function add(value) {
+      const url = absolute(pageURL, value);
+      if (!url || resources.some(item => item.url === url)) return;
+      const parsed = new URL(url);
+      const name = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "page-resource");
+      resources.push({
+        url,
+        host: parsed.host,
+        type: "DEBUG",
+        title: name,
+        quality: "page source",
+        size: "--",
+        confidence: 0.7,
+        fileName: name,
+        headers: { "User-Agent": "Fast Native Download Manager Page Resource Debugger", "Referer": pageURL },
+        cookie: null
+      });
+    }
+    async function main() {
+      try {
+        const res = await fetch(pageURL, { headers: { "User-Agent": "Fast Native Download Manager" } });
+        const html = await res.text();
+        const quoted = html.match(/https?:\\?\/\\?\/[^"'<> )]+|(?:src|href)=["']([^"']+)["']/g) || [];
+        for (const raw of quoted) {
+          const match = raw.match(/https?:\\?\/\\?\/[^"'<> )]+/) || raw.match(/(?:src|href)=["']([^"']+)["']/);
+          const value = (match?.[1] || match?.[0] || "").replaceAll("\\/", "/");
+          if (exts.test(value)) add(value);
+          exts.lastIndex = 0;
+        }
+      } catch {}
+    }
+    main().finally(() => process.stdout.write(JSON.stringify(resources.slice(0, 80))));
+    """#
+
+    private static let hlsDashExtractorScript = #"""
+    const pageURL = process.env.FNDM_PAGE_URL || process.argv[2] || "";
+    const resources = [];
+    function add(value) {
+      try {
+        const url = new URL(value, pageURL);
+        const ext = url.pathname.toLowerCase().endsWith(".mpd") ? "DASH" : "HLS";
+        const name = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || `${ext.toLowerCase()}-stream.mp4`);
+        resources.push({
+          url: url.toString(),
+          host: url.host,
+          type: ext,
+          title: name,
+          quality: "format selectable",
+          size: "--",
+          confidence: 0.95,
+          fileName: name.replace(/\.(m3u8|mpd)$/i, ".mp4"),
+          headers: { "X-FNDM-Engine": "ffmpeg", "X-FNDM-Site-Preset": ext, "Referer": pageURL },
+          cookie: null
+        });
+      } catch {}
+    }
+    async function main() {
+      try {
+        if (/\.(m3u8|mpd)(?:[?#]|$)/i.test(pageURL)) add(pageURL);
+        const res = await fetch(pageURL, { headers: { "User-Agent": "Fast Native Download Manager" } });
+        const html = await res.text();
+        const matches = html.match(/https?:\\?\/\\?\/[^"'<> )]+?\.(?:m3u8|mpd)(?:[?#][^"'<> )]+)?|[^"'<> )]+?\.(?:m3u8|mpd)(?:[?#][^"'<> )]+)?/ig) || [];
+        for (const raw of matches) add(raw.replaceAll("\\/", "/"));
+      } catch {}
+    }
+    main().finally(() => process.stdout.write(JSON.stringify(resources.slice(0, 40))));
+    """#
 }
 
 @MainActor
@@ -694,28 +1382,17 @@ private final class PluginManager: ObservableObject {
         DefaultPluginInstaller.installSiteExtractorPluginsIfNeeded()
         DefaultPluginInstaller.installBitTorrentPluginIfNeeded()
         DefaultPluginInstaller.installED2KPluginIfNeeded()
-        let builtinIDs = [
-            "builtin.bittorrent",
-            "builtin.ed2k",
-            "builtin.extractor.youtube",
-            "builtin.extractor.bilibili",
-            "builtin.extractor.tiktok",
-            "builtin.extractor.instagram"
-        ]
+        let builtinIDs = MarketplacePlugin.builtIns.map(\.id)
         trustedIDs.formUnion(builtinIDs)
-        statusMessage = "Marketplace built-ins installed: YouTube, Bilibili, TikTok, Instagram, BitTorrent, and eD2K."
+        var disabled = disabledIDs
+        builtinIDs.forEach { disabled.remove($0) }
+        disabledIDs = disabled
+        statusMessage = "Marketplace built-ins installed."
         reload()
     }
 
-    func installMarketplacePlugin(_ plugin: MarketplacePlugin) {
-        if let sourceURL = plugin.sourceURL, let url = URL(string: sourceURL) {
-            Task {
-                await installRemoteMarketplacePlugin(plugin, sourceURL: url)
-            }
-            return
-        }
-
-        switch plugin.id {
+    private func installBuiltInMarketplacePlugin(id: String) -> Bool {
+        switch id {
         case "builtin.bittorrent":
             DefaultPluginInstaller.installBitTorrentPluginIfNeeded()
         case "builtin.ed2k":
@@ -728,7 +1405,46 @@ private final class PluginManager: ObservableObject {
             DefaultPluginInstaller.installTikTokExtractorPluginIfNeeded()
         case "builtin.extractor.instagram":
             DefaultPluginInstaller.installInstagramExtractorPluginIfNeeded()
+        case "builtin.extractor.cloud-drives",
+             "builtin.extractor.github-releases",
+             "builtin.extractor.social-media",
+             "builtin.extractor.pan-direct",
+             "builtin.engine.aria2-http",
+             "builtin.engine.rclone",
+             "builtin.extractor.s3-r2",
+             "builtin.completion.auto-unzip",
+             "builtin.completion.checksum",
+             "builtin.completion.auto-organize",
+             "builtin.completion.virustotal",
+             "builtin.extractor.page-debug",
+             "builtin.extractor.hls-dash":
+            DefaultPluginInstaller.installExtendedPluginSuiteIfNeeded()
         default:
+            return false
+        }
+        return true
+    }
+
+    private var legacyBuiltInPluginIDs: [String] {
+        [
+            "builtin.bittorrent",
+            "builtin.ed2k",
+            "builtin.extractor.youtube",
+            "builtin.extractor.bilibili",
+            "builtin.extractor.tiktok",
+            "builtin.extractor.instagram"
+        ]
+    }
+
+    func installMarketplacePlugin(_ plugin: MarketplacePlugin) {
+        if let sourceURL = plugin.sourceURL, let url = URL(string: sourceURL) {
+            Task {
+                await installRemoteMarketplacePlugin(plugin, sourceURL: url)
+            }
+            return
+        }
+
+        guard installBuiltInMarketplacePlugin(id: plugin.id) else {
             statusMessage = "Unknown marketplace plugin: \(plugin.name)"
             return
         }
@@ -1144,6 +1860,7 @@ private enum ExternalDownloadRequestCenter {
                 onResume: { DownloadManager.shared.start(item) },
                 onPause: { DownloadManager.shared.pause(item) },
                 onCancel: { DownloadManager.shared.cancel(item) },
+                onOpenFile: { NSWorkspace.shared.open(item.destinationURL) },
                 onSaveSettings: { DownloadManager.shared.saveTaskSettings(item) }
             )
             detailWindowController = controller
@@ -1201,6 +1918,7 @@ private struct MainWindow: View {
     @AppStorage(AppPreferences.browserBridgeKey) private var browserBridgeEnabled = true
     @AppStorage(AppPreferences.showDownloadConfirmationKey) private var showDownloadConfirmation = true
     @AppStorage(AppPreferences.schedulerEnabledKey) private var schedulerEnabled = false
+    @AppStorage(AppPreferences.languageKey) private var languageRawValue = AppLanguage.defaultRawValue
 
     private let clipboardTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
@@ -1229,6 +1947,18 @@ private struct MainWindow: View {
     private var selectedDownload: DownloadItem? {
         guard let selectedDownloadID else { return nil }
         return manager.downloads.first { $0.id == selectedDownloadID }
+    }
+
+    private var deleteAlertTitle: String {
+        L.t("Delete download record?", "删除下载记录？")
+    }
+
+    private var deleteAlertMessage: String {
+        let fileName = deleteConfirmation?.fileName ?? L.t("this download", "此下载")
+        return L.t(
+            "Remove \"\(fileName)\" from the download list? This only removes the selected record and partial file.",
+            "从下载列表中移除「\(fileName)」？这只会删除所选记录和临时文件。"
+        )
     }
 
     var body: some View {
@@ -1282,6 +2012,7 @@ private struct MainWindow: View {
             )
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .id(languageRawValue)
         .sheet(item: $downloadConfirmationRequest) { request in
             AddDownloadSheet(request: request, manager: manager) { result in
                 addConfirmedDownload(result)
@@ -1321,38 +2052,38 @@ private struct MainWindow: View {
             get: { developmentMessage != nil },
             set: { if !$0 { developmentMessage = nil } }
         )) {
-            Button("OK", role: .cancel) {}
+            Button(L.t("OK", "确定"), role: .cancel) {}
         } message: {
             Text(developmentMessage ?? "这个功能正在开发中。")
         }
-        .alert("Detected downloadable link", isPresented: Binding(
+        .alert(L.t("Detected downloadable link", "检测到可下载链接"), isPresented: Binding(
             get: { pendingClipboardURL != nil },
             set: { if !$0 { pendingClipboardURL = nil } }
         )) {
-            Button("Download") {
+            Button(L.t("Download", "下载")) {
                 if let url = pendingClipboardURL {
                     requestDownloadConfirmation(url)
                 }
                 pendingClipboardURL = nil
             }
-            Button("Ignore", role: .cancel) {
+            Button(L.t("Ignore", "忽略"), role: .cancel) {
                 pendingClipboardURL = nil
             }
         } message: {
             Text(pendingClipboardURL ?? "")
         }
-        .alert("Delete download record?", isPresented: Binding(
+        .alert(deleteAlertTitle, isPresented: Binding(
             get: { deleteConfirmation != nil },
             set: { if !$0 { deleteConfirmation = nil } }
         )) {
-            Button("Delete", role: .destructive) {
+            Button(L.t("Delete", "删除"), role: .destructive) {
                 performConfirmedDelete()
             }
-            Button("Cancel", role: .cancel) {
+            Button(L.t("Cancel", "取消"), role: .cancel) {
                 deleteConfirmation = nil
             }
         } message: {
-            Text("Remove \"\(deleteConfirmation?.fileName ?? "this download")\" from the download list? This only removes the selected record and partial file.")
+            Text(deleteAlertMessage)
         }
         .onAppear {
             selectedDownloadID = manager.downloads.first?.id
@@ -1425,6 +2156,7 @@ private struct MainWindow: View {
             onResume: { manager.start(item) },
             onPause: { manager.pause(item) },
             onCancel: { manager.cancel(item) },
+            onOpenFile: { NSWorkspace.shared.open(item.destinationURL) },
             onSaveSettings: { manager.saveTaskSettings(item) }
         )
         detailWindowController = controller
@@ -2076,6 +2808,7 @@ private final class DownloadDetailWindowController: NSWindowController, NSWindow
         onResume: @escaping () -> Void,
         onPause: @escaping () -> Void,
         onCancel: @escaping () -> Void,
+        onOpenFile: @escaping () -> Void,
         onSaveSettings: @escaping () -> Void
     ) {
         let rootView = NativeDownloadDetails(
@@ -2083,6 +2816,7 @@ private final class DownloadDetailWindowController: NSWindowController, NSWindow
             onResume: onResume,
             onPause: onPause,
             onCancel: onCancel,
+            onOpenFile: onOpenFile,
             onSaveSettings: onSaveSettings
         )
         let hostingController = NSHostingController(rootView: rootView)
@@ -2170,18 +2904,18 @@ private struct NativeToolbar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            NativeToolbarButton(title: "Add URL", symbol: "plus", tint: .green, enabled: true, action: onAddURL)
-            NativeToolbarButton(title: "Resume", symbol: "arrow.clockwise", tint: .blue, enabled: true, action: onResume)
-            NativeToolbarButton(title: "Stop", symbol: "stop.fill", tint: .orange, enabled: true, action: onStop)
-            NativeToolbarButton(title: "Stop All", symbol: "xmark", tint: .red, enabled: true, action: onStopAll)
-            NativeToolbarButton(title: "Delete", symbol: "trash", tint: .red, enabled: true, action: onDelete)
-            NativeToolbarButton(title: "Delete Done", symbol: "shippingbox", tint: .indigo, enabled: true, action: onDeleteCompleted)
-            NativeToolbarButton(title: "Options", symbol: "slider.horizontal.3", tint: .orange, enabled: true, action: onOptions)
-            NativeToolbarButton(title: "Scheduler", symbol: "alarm", tint: .orange, enabled: true, action: onScheduler)
-            NativeToolbarButton(title: "Start Queue", symbol: "folder.badge.plus", tint: .green, enabled: true, action: onStartQueue)
-            NativeToolbarButton(title: "Stop Queue", symbol: "folder.badge.minus", tint: .red, enabled: true, action: onStopQueue)
-            NativeToolbarButton(title: "Grabber", symbol: "scope", tint: .blue, enabled: true, action: onGrabber)
-            NativeToolbarButton(title: "Tell a Friend", symbol: "person.wave.2", tint: .cyan, enabled: true, action: onTellFriend)
+            NativeToolbarButton(title: L.t("Add URL", "添加链接"), symbol: "plus", tint: .green, enabled: true, action: onAddURL)
+            NativeToolbarButton(title: L.t("Resume", "继续"), symbol: "arrow.clockwise", tint: .blue, enabled: true, action: onResume)
+            NativeToolbarButton(title: L.t("Stop", "停止"), symbol: "stop.fill", tint: .orange, enabled: true, action: onStop)
+            NativeToolbarButton(title: L.t("Stop All", "全部停止"), symbol: "xmark", tint: .red, enabled: true, action: onStopAll)
+            NativeToolbarButton(title: L.t("Delete", "删除"), symbol: "trash", tint: .red, enabled: true, action: onDelete)
+            NativeToolbarButton(title: L.t("Delete Done", "删除已完成"), symbol: "shippingbox", tint: .indigo, enabled: true, action: onDeleteCompleted)
+            NativeToolbarButton(title: L.t("Options", "选项"), symbol: "slider.horizontal.3", tint: .orange, enabled: true, action: onOptions)
+            NativeToolbarButton(title: L.t("Scheduler", "计划任务"), symbol: "alarm", tint: .orange, enabled: true, action: onScheduler)
+            NativeToolbarButton(title: L.t("Start Queue", "开始队列"), symbol: "folder.badge.plus", tint: .green, enabled: true, action: onStartQueue)
+            NativeToolbarButton(title: L.t("Stop Queue", "停止队列"), symbol: "folder.badge.minus", tint: .red, enabled: true, action: onStopQueue)
+            NativeToolbarButton(title: L.t("Grabber", "抓取器"), symbol: "scope", tint: .blue, enabled: true, action: onGrabber)
+            NativeToolbarButton(title: L.t("Tell a Friend", "推荐好友"), symbol: "person.wave.2", tint: .cyan, enabled: true, action: onTellFriend)
             Spacer()
         }
         .padding(.horizontal, 16)
@@ -2232,6 +2966,7 @@ private struct OptionsPanel: View {
     @Binding var clipboardMonitoringEnabled: Bool
     @Binding var browserBridgeEnabled: Bool
     @Binding var showDownloadConfirmation: Bool
+    @AppStorage(AppPreferences.languageKey) private var languageRawValue = AppLanguage.defaultRawValue
     @AppStorage(AppPreferences.saveDirectoryKey) private var saveDirectoryPath = AppPreferences.saveDirectory.path
     @AppStorage(AppPreferences.defaultEngineKey) private var defaultEngineRawValue = DownloadEngineChoice.automatic.rawValue
     @AppStorage(AppPreferences.cookiesFilePathKey) private var cookiesFilePath = ""
@@ -2284,9 +3019,9 @@ private struct OptionsPanel: View {
                     .font(.system(size: 26, weight: .semibold))
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Options")
+                    Text(L.t("Options", "选项"))
                         .font(.title3.weight(.semibold))
-                    Text("Download behavior, browser capture, and queue settings")
+                    Text(L.t("Download behavior, browser capture, and queue settings", "下载行为、浏览器捕获和队列设置"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2297,21 +3032,25 @@ private struct OptionsPanel: View {
             Divider()
 
             TabView {
+                languageTab
+                    .tabItem {
+                        Label(L.t("Language", "语言"), systemImage: "globe")
+                    }
                 downloadsTab
                     .tabItem {
-                        Label("Downloads", systemImage: "arrow.down.circle")
+                        Label(L.t("Downloads", "下载"), systemImage: "arrow.down.circle")
                     }
                 browserTab
                     .tabItem {
-                        Label("Browser", systemImage: "globe")
+                        Label(L.t("Browser", "浏览器"), systemImage: "globe")
                     }
                 queueTab
                     .tabItem {
-                        Label("Queue", systemImage: "list.bullet.rectangle")
+                        Label(L.t("Queue", "队列"), systemImage: "list.bullet.rectangle")
                     }
                 pluginsTab
                     .tabItem {
-                        Label("Plugins", systemImage: "puzzlepiece.extension")
+                        Label(L.t("Plugins", "插件"), systemImage: "puzzlepiece.extension")
                     }
             }
             .padding(20)
@@ -2319,11 +3058,11 @@ private struct OptionsPanel: View {
             Divider()
 
             HStack {
-                Button("Reset Defaults") {
+                Button(L.t("Reset Defaults", "恢复默认")) {
                     resetDefaults()
                 }
                 Spacer()
-                Button("Done") {
+                Button(L.t("Done", "完成")) {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -2358,9 +3097,29 @@ private struct OptionsPanel: View {
         }
     }
 
+    private var languageTab: some View {
+        Form {
+            Section(L.t("Language", "语言")) {
+                Picker(L.t("App language", "应用语言"), selection: $languageRawValue) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                Text(L.t(
+                    "The default follows macOS preferred languages. Unsupported languages fall back to English.",
+                    "默认跟随 macOS 首选语言；不支持的语言会回退到英语。"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
     private var downloadsTab: some View {
         Form {
-            Section("Save Location") {
+            Section(L.t("Save Location", "保存位置")) {
                 HStack(spacing: 8) {
                     Text(saveDirectoryPath)
                         .lineLimit(1)
@@ -2369,33 +3128,33 @@ private struct OptionsPanel: View {
                         .padding(.horizontal, 8)
                         .frame(height: 28)
                         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                    Button("Browse...") {
+                    Button(L.t("Browse...", "浏览...")) {
                         chooseSaveDirectory()
                     }
-                    Button("Open") {
+                    Button(L.t("Open", "打开")) {
                         NSWorkspace.shared.open(saveDirectory)
                     }
                 }
-                Text("New downloads and the task database will use this folder.")
+                Text(L.t("New downloads and the task database will use this folder.", "新的下载任务和任务数据库将使用此文件夹。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Engine") {
-                Picker("Default engine", selection: defaultEngine) {
+            Section(L.t("Engine", "引擎")) {
+                Picker(L.t("Default engine", "默认引擎"), selection: defaultEngine) {
                     ForEach(DownloadEngineChoice.allCases) { engine in
                         Text(engine.rawValue).tag(engine)
                     }
                 }
                 .pickerStyle(.segmented)
-                Text("Browser-detected platform links can still override this with yt-dlp or ffmpeg.")
+                Text(L.t("Browser-detected platform links can still override this with yt-dlp or ffmpeg.", "浏览器检测到的平台链接仍可自动改用 yt-dlp 或 ffmpeg。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Confirmation") {
-                Toggle("Show download confirmation before starting", isOn: $showDownloadConfirmation)
-                Text("When disabled, browser and grabber downloads start immediately.")
+            Section(L.t("Confirmation", "确认")) {
+                Toggle(L.t("Show download confirmation before starting", "开始前显示下载确认窗口"), isOn: $showDownloadConfirmation)
+                Text(L.t("When disabled, browser and grabber downloads start immediately.", "关闭后，浏览器和抓取器发送的下载会立即开始。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -2405,80 +3164,80 @@ private struct OptionsPanel: View {
 
     private var browserTab: some View {
         Form {
-            Section("Capture") {
-                Toggle("Enable browser integration bridge", isOn: $browserBridgeEnabled)
-                Toggle("Monitor clipboard for downloadable links", isOn: $clipboardMonitoringEnabled)
-                Text("The Chrome and Firefox extensions send links to the local bridge on 127.0.0.1:51237.")
+            Section(L.t("Capture", "捕获")) {
+                Toggle(L.t("Enable browser integration bridge", "启用浏览器集成桥接"), isOn: $browserBridgeEnabled)
+                Toggle(L.t("Monitor clipboard for downloadable links", "监控剪贴板中的可下载链接"), isOn: $clipboardMonitoringEnabled)
+                Text(L.t("The Chrome and Firefox extensions send links to the local bridge on 127.0.0.1:51237.", "Chrome 和 Firefox 扩展会把链接发送到 127.0.0.1:51237 的本地桥接服务。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Extension") {
+            Section(L.t("Extension", "扩展")) {
                 HStack {
-                    Label(browserBridgeEnabled ? "Bridge is enabled" : "Bridge is disabled", systemImage: browserBridgeEnabled ? "checkmark.circle.fill" : "pause.circle")
+                    Label(browserBridgeEnabled ? L.t("Bridge is enabled", "桥接已启用") : L.t("Bridge is disabled", "桥接已停用"), systemImage: browserBridgeEnabled ? "checkmark.circle.fill" : "pause.circle")
                         .foregroundStyle(browserBridgeEnabled ? .green : .secondary)
                     Spacer()
-                    Button("Open Chrome Extensions") {
+                    Button(L.t("Open Chrome Extensions", "打开 Chrome 扩展")) {
                         NSWorkspace.shared.open(URL(string: "chrome://extensions")!)
                     }
-                    Button("Open Firefox Add-ons") {
+                    Button(L.t("Open Firefox Add-ons", "打开 Firefox 附加组件")) {
                         NSWorkspace.shared.open(URL(string: "about:debugging#/runtime/this-firefox")!)
                     }
                 }
             }
 
-            Section("Cookies") {
-                Picker("Read cookies from browser", selection: cookiesFromBrowser) {
+            Section(L.t("Cookies", "Cookie")) {
+                Picker(L.t("Read cookies from browser", "从浏览器读取 Cookie"), selection: cookiesFromBrowser) {
                     ForEach(BrowserCookieSource.allCases) { source in
                         Text(source.rawValue).tag(source)
                     }
                 }
                 .pickerStyle(.menu)
                 HStack(spacing: 8) {
-                    Text(cookiesFilePath.isEmpty ? "No cookies.txt selected" : cookiesFilePath)
+                    Text(cookiesFilePath.isEmpty ? L.t("No cookies.txt selected", "未选择 cookies.txt") : cookiesFilePath)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
                         .frame(height: 28)
                         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                    Button("Import cookies.txt...") {
+                    Button(L.t("Import cookies.txt...", "导入 cookies.txt...")) {
                         chooseCookiesFile()
                     }
-                    Button("Clear") {
+                    Button(L.t("Clear", "清除")) {
                         cookiesFilePath = ""
                     }
                     .disabled(cookiesFilePath.isEmpty)
                 }
-                Button("Manage Cookie Profiles...") {
+                Button(L.t("Manage Cookie Profiles...", "管理 Cookie 配置...")) {
                     showingCookieProfiles = true
                 }
-                Text("yt-dlp will prefer the selected browser cookies and also use cookies.txt when provided.")
+                Text(L.t("yt-dlp will prefer the selected browser cookies and also use cookies.txt when provided.", "yt-dlp 会优先使用所选浏览器 Cookie，并在提供 cookies.txt 时一并使用。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Proxy") {
+            Section(L.t("Proxy", "代理")) {
                 HStack(spacing: 8) {
-                    Text(defaultProxy.isEmpty ? "No default proxy" : defaultProxy)
+                    Text(defaultProxy.isEmpty ? L.t("No default proxy", "无默认代理") : defaultProxy)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
                         .frame(height: 28)
                         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                    Button("Use System") {
+                    Button(L.t("Use System", "使用系统")) {
                         defaultProxy = SystemProxyDetector.currentProxy() ?? ""
                     }
-                    Button("Manage Proxies...") {
+                    Button(L.t("Manage Proxies...", "管理代理...")) {
                         showingProxyProfiles = true
                     }
-                    Button("Clear") {
+                    Button(L.t("Clear", "清除")) {
                         defaultProxy = ""
                     }
                     .disabled(defaultProxy.isEmpty)
                 }
-                Text("New downloads can inherit this default proxy. Per-task proxy still overrides it.")
+                Text(L.t("New downloads can inherit this default proxy. Per-task proxy still overrides it.", "新下载可继承此默认代理；单个任务的代理设置仍会覆盖它。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -2488,38 +3247,38 @@ private struct OptionsPanel: View {
 
     private var queueTab: some View {
         Form {
-            Section("Queue") {
-                Stepper("Maximum concurrent downloads: \(manager.maximumConcurrentDownloads)", value: $manager.maximumConcurrentDownloads, in: 1...16)
+            Section(L.t("Queue", "队列")) {
+                Stepper("\(L.t("Maximum concurrent downloads", "最大并发下载数")): \(manager.maximumConcurrentDownloads)", value: $manager.maximumConcurrentDownloads, in: 1...16)
                 Text(manager.queueStatusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Speed Limits") {
+            Section(L.t("Speed Limits", "速度限制")) {
                 SpeedLimitStepper(
-                    title: "Global speed limit",
+                    title: L.t("Global speed limit", "全局速度限制"),
                     value: $manager.globalSpeedLimitBytesPerSecond
                 )
                 SpeedLimitStepper(
-                    title: "Queue speed limit",
+                    title: L.t("Queue speed limit", "队列速度限制"),
                     value: $manager.queueSpeedLimitBytesPerSecond
                 )
-                Text("0 means unlimited. Queue limit applies to tasks started through Start Queue.")
+                Text(L.t("0 means unlimited. Queue limit applies to tasks started through Start Queue.", "0 表示不限速。队列限速适用于通过“开始队列”启动的任务。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Time Window Speed Limit") {
-                Toggle("Enable scheduled speed limit", isOn: $timeLimitEnabled)
+            Section(L.t("Time Window Speed Limit", "定时速度限制")) {
+                Toggle(L.t("Enable scheduled speed limit", "启用定时限速"), isOn: $timeLimitEnabled)
                 HStack {
-                    TimeMinutesStepper(title: "From", minutes: $timeLimitStartMinutes)
-                    TimeMinutesStepper(title: "To", minutes: $timeLimitEndMinutes)
+                    TimeMinutesStepper(title: L.t("From", "从"), minutes: $timeLimitStartMinutes)
+                    TimeMinutesStepper(title: L.t("To", "到"), minutes: $timeLimitEndMinutes)
                 }
                 SpeedLimitStepper(
-                    title: "Window speed limit",
+                    title: L.t("Window speed limit", "时间窗口限速"),
                     value: timeLimitSpeedBinding
                 )
-                Text("Applies every day. Windows crossing midnight are supported.")
+                Text(L.t("Applies every day. Windows crossing midnight are supported.", "每天生效。支持跨午夜的时间窗口。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -2529,35 +3288,42 @@ private struct OptionsPanel: View {
 
     private var pluginsTab: some View {
         VStack(spacing: 12) {
-            HStack {
+            HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Plugin System")
+                    Text(L.t("Plugin System", "插件系统"))
                         .font(.headline)
-                    Text("Install local plugin folders with a plugin.json manifest.")
+                    Text(L.t("Manage extractors and external download engines.", "管理提取器和外部下载引擎。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Install...") {
+                Button(L.t("Install...", "安装...")) {
                     pluginManager.installFromPicker()
                 }
-                Button("Marketplace") {
+                Button(L.t("Marketplace", "市场")) {
                     showingPluginMarketplace = true
                 }
-                Button("Template") {
+                Button(L.t("Template", "模板")) {
                     pluginManager.createTemplatePlugin()
                 }
-                Button("Audit Log") {
+                Button(L.t("Audit Log", "审计日志")) {
                     showingPluginAuditLog = true
                 }
-                Button("Open Folder") {
+                Button(L.t("Open Folder", "打开文件夹")) {
                     pluginManager.openPluginsFolder()
                 }
             }
 
-            HStack(spacing: 14) {
-                Stepper("Plugin timeout: \(pluginExecutionTimeoutSeconds)s", value: $pluginExecutionTimeoutSeconds, in: 30...7200, step: 30)
-                Toggle("Ask before trust", isOn: $confirmPluginTrust)
+            HStack(spacing: 12) {
+                Text("\(L.t("Plugin timeout", "插件超时")): \(pluginExecutionTimeoutSeconds)s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Stepper("", value: $pluginExecutionTimeoutSeconds, in: 30...7200, step: 30)
+                    .labelsHidden()
+                    .frame(width: 58)
+                Toggle(L.t("Ask before trust", "信任前询问"), isOn: $confirmPluginTrust)
+                    .toggleStyle(.checkbox)
+                Spacer()
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -2567,9 +3333,9 @@ private struct OptionsPanel: View {
                     Image(systemName: "puzzlepiece.extension")
                         .font(.system(size: 36))
                         .foregroundStyle(.secondary)
-                    Text("No plugins installed")
+                    Text(L.t("No plugins installed", "未安装插件"))
                         .font(.headline)
-                    Text("Create a template plugin or install a folder containing plugin.json.")
+                    Text(L.t("Create a template plugin or install a folder containing plugin.json.", "创建模板插件，或安装包含 plugin.json 的文件夹。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2580,7 +3346,7 @@ private struct OptionsPanel: View {
                 }
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: 10) {
                         ForEach(pluginManager.plugins) { plugin in
                             PluginRow(
                                 plugin: plugin,
@@ -2658,6 +3424,8 @@ private struct OptionsPanel: View {
         defaults.set(1800, forKey: AppPreferences.pluginExecutionTimeoutKey)
         defaults.set(true, forKey: AppPreferences.confirmPluginTrustKey)
         defaults.removeObject(forKey: AppPreferences.marketplaceCatalogURLKey)
+        defaults.set(AppLanguage.defaultRawValue, forKey: AppPreferences.languageKey)
+        languageRawValue = AppLanguage.defaultRawValue
         saveDirectoryPath = AppPreferences.saveDirectory.path
         clipboardMonitoringEnabled = true
         browserBridgeEnabled = true
@@ -2736,9 +3504,9 @@ private struct CookieProfilesPanel: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Cookie Profiles")
+                    Text(L.t("Cookie Profiles", "Cookie 配置"))
                         .font(.title3.weight(.semibold))
-                    Text("Save browser/cookies.txt combinations for yt-dlp.")
+                    Text(L.t("Save browser/cookies.txt combinations for yt-dlp.", "保存供 yt-dlp 使用的浏览器/cookies.txt 组合。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2748,29 +3516,29 @@ private struct CookieProfilesPanel: View {
             Divider()
 
             Form {
-                Section("New Profile") {
-                    TextField("Name", text: $name)
-                    Picker("Browser", selection: $browser) {
+                Section(L.t("New Profile", "新配置")) {
+                    TextField(L.t("Name", "名称"), text: $name)
+                    Picker(L.t("Browser", "浏览器"), selection: $browser) {
                         ForEach(BrowserCookieSource.allCases) { source in
                             Text(source.rawValue).tag(source)
                         }
                     }
                     HStack {
-                        Text(cookiesFilePath.isEmpty ? "No cookies.txt selected" : cookiesFilePath)
+                        Text(cookiesFilePath.isEmpty ? L.t("No cookies.txt selected", "未选择 cookies.txt") : cookiesFilePath)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Button("Choose...") { chooseCookiesFile() }
+                        Button(L.t("Choose...", "选择...")) { chooseCookiesFile() }
                     }
-                    Button("Add Profile") {
+                    Button(L.t("Add Profile", "添加配置")) {
                         addProfile()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
-                Section("Saved Profiles") {
+                Section(L.t("Saved Profiles", "已保存配置")) {
                     if profiles.isEmpty {
-                        Text("No cookie profiles yet.")
+                        Text(L.t("No cookie profiles yet.", "暂无 Cookie 配置。"))
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(profiles) { profile in
@@ -2784,7 +3552,7 @@ private struct CookieProfilesPanel: View {
                                         .truncationMode(.middle)
                                 }
                                 Spacer()
-                                Button("Use") {
+                                Button(L.t("Use", "使用")) {
                                     selectedBrowserRawValue = profile.browser
                                     selectedCookiesFilePath = profile.cookiesFilePath
                                 }
@@ -2806,7 +3574,7 @@ private struct CookieProfilesPanel: View {
             Divider()
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }
+                Button(L.t("Done", "完成")) { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(18)
@@ -2853,14 +3621,14 @@ private struct ProxyProfilesPanel: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Proxy Profiles")
+                    Text(L.t("Proxy Profiles", "代理配置"))
                         .font(.title3.weight(.semibold))
-                    Text("HTTP, HTTPS, and SOCKS5 proxy presets for downloads.")
+                    Text(L.t("HTTP, HTTPS, and SOCKS5 proxy presets for downloads.", "用于下载的 HTTP、HTTPS 和 SOCKS5 代理预设。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Import System Proxy") {
+                Button(L.t("Import System Proxy", "导入系统代理")) {
                     if let proxy = SystemProxyDetector.currentProxy() {
                         proxyURL = proxy
                         if name.isEmpty { name = "System Proxy" }
@@ -2873,13 +3641,13 @@ private struct ProxyProfilesPanel: View {
             Divider()
 
             Form {
-                Section("New Profile") {
-                    TextField("Name", text: $name)
-                    TextField("Proxy URL, e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080", text: $proxyURL)
+                Section(L.t("New Profile", "新配置")) {
+                    TextField(L.t("Name", "名称"), text: $name)
+                    TextField(L.t("Proxy URL, e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080", "代理地址，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"), text: $proxyURL)
                     HStack {
-                        Button("Test") { testProxy(proxyURL) }
+                        Button(L.t("Test", "测试")) { testProxy(proxyURL) }
                             .disabled(proxyURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        Button("Add Profile") { addProfile() }
+                        Button(L.t("Add Profile", "添加配置")) { addProfile() }
                             .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || proxyURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         Text(testStatus)
                             .font(.caption)
@@ -2887,9 +3655,9 @@ private struct ProxyProfilesPanel: View {
                     }
                 }
 
-                Section("Saved Proxies") {
+                Section(L.t("Saved Proxies", "已保存代理")) {
                     if profiles.isEmpty {
-                        Text("No proxy profiles yet.")
+                        Text(L.t("No proxy profiles yet.", "暂无代理配置。"))
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(profiles) { profile in
@@ -2901,10 +3669,10 @@ private struct ProxyProfilesPanel: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Button("Use Default") {
+                                Button(L.t("Use Default", "设为默认")) {
                                     defaultProxy = profile.proxyURL
                                 }
-                                Button("Test") {
+                                Button(L.t("Test", "测试")) {
                                     testProxy(profile.proxyURL)
                                 }
                                 Button(role: .destructive) {
@@ -2924,13 +3692,13 @@ private struct ProxyProfilesPanel: View {
 
             Divider()
             HStack {
-                Text(defaultProxy.isEmpty ? "Default proxy: none" : "Default proxy: \(defaultProxy)")
+                Text(defaultProxy.isEmpty ? L.t("Default proxy: none", "默认代理：无") : "\(L.t("Default proxy", "默认代理")): \(defaultProxy)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                Button("Done") { dismiss() }
+                Button(L.t("Done", "完成")) { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(18)
@@ -3006,14 +3774,14 @@ private struct PluginMarketplacePanel: View {
                     .font(.system(size: 26, weight: .semibold))
                     .foregroundStyle(.purple)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Plugin Marketplace")
+                    Text(L.t("Plugin Marketplace", "插件市场"))
                         .font(.title3.weight(.semibold))
-                    Text("Built-in plugins are trusted by default. External plugins still require manual trust.")
+                    Text(L.t("Built-in plugins are trusted by default. External plugins still require manual trust.", "内置插件默认受信任，外部插件仍需要手动信任。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Install All") {
+                Button(L.t("Install All", "全部安装")) {
                     pluginManager.installMarketplacePlugins()
                 }
             }
@@ -3023,13 +3791,13 @@ private struct PluginMarketplacePanel: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    TextField("Remote catalog JSON URL", text: $catalogURLString)
+                    TextField(L.t("Remote catalog JSON URL", "远程目录 JSON 地址"), text: $catalogURLString)
                         .textFieldStyle(.roundedBorder)
-                    Button("Refresh Remote") {
+                    Button(L.t("Refresh Remote", "刷新远程")) {
                         refreshRemoteCatalog()
                     }
                 }
-                Text(catalogStatus.isEmpty ? "Catalog format: JSON array of marketplace plugins with id, name, description, kind, permissions, sourceURL." : catalogStatus)
+                Text(catalogStatus.isEmpty ? L.t("Catalog format: JSON array of marketplace plugins with id, name, description, kind, permissions, sourceURL.", "目录格式：插件 JSON 数组，包含 id、name、description、kind、permissions、sourceURL。") : L.runtime(catalogStatus))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -3061,7 +3829,7 @@ private struct PluginMarketplacePanel: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Button("Done") {
+                Button(L.t("Done", "完成")) {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -3073,21 +3841,21 @@ private struct PluginMarketplacePanel: View {
 
     private func refreshRemoteCatalog() {
         guard let url = URL(string: catalogURLString), !catalogURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            catalogStatus = "Enter a valid catalog URL."
+            catalogStatus = L.t("Enter a valid catalog URL.", "请输入有效的目录地址。")
             return
         }
-        catalogStatus = "Loading remote catalog..."
+        catalogStatus = L.t("Loading remote catalog...", "正在加载远程目录...")
         Task {
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 let decoded = try JSONDecoder().decode([MarketplacePlugin].self, from: data)
                 await MainActor.run {
                     remotePlugins = decoded
-                    catalogStatus = "Loaded \(decoded.count) remote plugin(s)."
+                    catalogStatus = "\(L.t("Loaded", "已加载")) \(decoded.count) \(L.t("remote plugin(s).", "个远程插件。"))"
                 }
             } catch {
                 await MainActor.run {
-                    catalogStatus = "Remote catalog failed: \(error.localizedDescription)"
+                    catalogStatus = "\(L.t("Remote catalog failed", "远程目录加载失败")): \(error.localizedDescription)"
                 }
             }
         }
@@ -3118,7 +3886,7 @@ private struct MarketplacePluginRow: View {
                         .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
                         .foregroundStyle(.secondary)
                     if installed {
-                        Text("installed")
+                        Text(L.t("installed", "已安装"))
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -3126,7 +3894,7 @@ private struct MarketplacePluginRow: View {
                             .foregroundStyle(.green)
                     }
                     if plugin.sourceURL != nil {
-                        Text("remote")
+                        Text(L.t("remote", "远程"))
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -3143,7 +3911,7 @@ private struct MarketplacePluginRow: View {
 
             Spacer()
 
-            Button(installed ? "Restore" : "Install") {
+            Button(installed ? L.t("Restore", "恢复") : L.t("Install", "安装")) {
                 onInstall()
             }
         }
@@ -3174,7 +3942,7 @@ private struct PluginAuditLogPanel: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.blue)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Plugin Audit Log")
+                    Text(L.t("Plugin Audit Log", "插件审计日志"))
                         .font(.title3.weight(.semibold))
                     Text(PluginAuditLog.url.path)
                         .font(.caption)
@@ -3183,10 +3951,10 @@ private struct PluginAuditLogPanel: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
-                Button("Reload") {
+                Button(L.t("Reload", "重新加载")) {
                     load()
                 }
-                Button("Open File") {
+                Button(L.t("Open File", "打开文件")) {
                     NSWorkspace.shared.open(PluginAuditLog.url)
                 }
             }
@@ -3195,7 +3963,7 @@ private struct PluginAuditLogPanel: View {
             Divider()
 
             ScrollView {
-                Text(logText.isEmpty ? "No plugin audit entries yet." : logText)
+                Text(logText.isEmpty ? L.t("No plugin audit entries yet.", "暂无插件审计记录。") : logText)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3206,12 +3974,12 @@ private struct PluginAuditLogPanel: View {
             Divider()
 
             HStack {
-                Button("Clear") {
+                Button(L.t("Clear", "清除")) {
                     try? "".write(to: PluginAuditLog.url, atomically: true, encoding: .utf8)
                     load()
                 }
                 Spacer()
-                Button("Done") {
+                Button(L.t("Done", "完成")) {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -3254,11 +4022,11 @@ private struct PluginSettingsPanel: View {
                 }
                 Spacer()
                 if let settingsURL = resolvedSettingsURL {
-                    Button("Open Plugin UI") {
+                    Button(L.t("Open Plugin UI", "打开插件界面")) {
                         NSWorkspace.shared.open(settingsURL)
                     }
                 }
-                Button("Reveal") {
+                Button(L.t("Reveal", "显示")) {
                     NSWorkspace.shared.activateFileViewerSelecting([plugin.folderURL])
                 }
             }
@@ -3269,35 +4037,35 @@ private struct PluginSettingsPanel: View {
             TabView {
                 Form {
                     let warnings = PluginSecurityPolicy.warnings(for: plugin.manifest)
-                    Section("Runtime") {
-                        LabeledContent("Enabled", value: plugin.enabled ? "Yes" : "No")
-                        LabeledContent("Trusted", value: plugin.trusted ? "Yes" : "No")
-                        LabeledContent("Kind", value: plugin.manifest.kind ?? "--")
-                        LabeledContent("Entry", value: plugin.manifest.entry ?? "--")
-                        LabeledContent("Extractor", value: plugin.manifest.extractorScript ?? "--")
-                        LabeledContent("Settings UI", value: resolvedSettingsURL?.lastPathComponent ?? plugin.manifest.settingsURL ?? "--")
+                    Section(L.t("Runtime", "运行时")) {
+                        LabeledContent(L.t("Enabled", "已启用"), value: plugin.enabled ? L.t("Yes", "是") : L.t("No", "否"))
+                        LabeledContent(L.t("Trusted", "已信任"), value: plugin.trusted ? L.t("Yes", "是") : L.t("No", "否"))
+                        LabeledContent(L.t("Kind", "类型"), value: plugin.manifest.kind ?? "--")
+                        LabeledContent(L.t("Entry", "入口"), value: plugin.manifest.entry ?? "--")
+                        LabeledContent(L.t("Extractor", "提取器"), value: plugin.manifest.extractorScript ?? "--")
+                        LabeledContent(L.t("Settings UI", "设置界面"), value: resolvedSettingsURL?.lastPathComponent ?? plugin.manifest.settingsURL ?? "--")
                     }
-                    Section("Permissions") {
+                    Section(L.t("Permissions", "权限")) {
                         FlowLine(items: plugin.manifest.permissions ?? [])
                     }
                     if !warnings.isEmpty {
-                        Section("Security Warnings") {
+                        Section(L.t("Security Warnings", "安全警告")) {
                             ForEach(warnings, id: \.self) { warning in
                                 Label(warning, systemImage: "exclamationmark.triangle.fill")
                                     .foregroundStyle(.orange)
                             }
                         }
                     }
-                    Section("Matching") {
-                        LabeledContent("Protocols", value: (plugin.manifest.protocols ?? []).joined(separator: ", ").nilIfEmpty ?? "--")
-                        LabeledContent("Extensions", value: (plugin.manifest.fileExtensions ?? []).joined(separator: ", ").nilIfEmpty ?? "--")
+                    Section(L.t("Matching", "匹配")) {
+                        LabeledContent(L.t("Protocols", "协议"), value: (plugin.manifest.protocols ?? []).joined(separator: ", ").nilIfEmpty ?? "--")
+                        LabeledContent(L.t("Extensions", "扩展名"), value: (plugin.manifest.fileExtensions ?? []).joined(separator: ", ").nilIfEmpty ?? "--")
                         Text((plugin.manifest.urlPatterns ?? []).joined(separator: "\n").nilIfEmpty ?? "--")
                             .font(.caption)
                             .textSelection(.enabled)
                     }
                 }
                 .formStyle(.grouped)
-                .tabItem { Label("Summary", systemImage: "info.circle") }
+                .tabItem { Label(L.t("Summary", "摘要"), systemImage: "info.circle") }
 
                 ScrollView {
                     Text(manifestText)
@@ -3307,28 +4075,28 @@ private struct PluginSettingsPanel: View {
                         .padding(12)
                 }
                 .background(Color(nsColor: .textBackgroundColor))
-                .tabItem { Label("Manifest", systemImage: "curlybraces") }
+                .tabItem { Label(L.t("Manifest", "清单"), systemImage: "curlybraces") }
 
                 ScrollView {
-                    Text(plugin.manifest.engineCommand?.nilIfEmpty ?? "No engine command declared.")
+                    Text(plugin.manifest.engineCommand?.nilIfEmpty ?? L.t("No engine command declared.", "未声明引擎命令。"))
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                 }
                 .background(Color(nsColor: .textBackgroundColor))
-                .tabItem { Label("Command", systemImage: "terminal") }
+                .tabItem { Label(L.t("Command", "命令"), systemImage: "terminal") }
             }
             .padding(20)
 
             Divider()
 
             HStack {
-                Text("External plugin UI panels can be added later through a plugin-declared settings view.")
+                Text(L.t("External plugin UI panels can be added later through a plugin-declared settings view.", "之后可以通过插件声明的设置视图添加外部插件界面。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Done") {
+                Button(L.t("Done", "完成")) {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -3359,100 +4127,102 @@ private struct PluginRow: View {
     let onRemove: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: pluginIcon)
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(plugin.enabled ? Color.accentColor : Color.secondary)
-                .frame(width: 34, height: 34)
+                .frame(width: 42, height: 42)
                 .background((plugin.enabled ? Color.accentColor : Color.secondary).opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Text(plugin.manifest.name)
                         .font(.callout.weight(.semibold))
+                        .lineLimit(1)
                     Text(plugin.manifest.version)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let kind = plugin.manifest.kind, !kind.isEmpty {
-                        Text(kind)
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+                        PluginBadge(text: kind, color: .secondary)
                     }
-                    Text(plugin.trusted ? "trusted" : "untrusted")
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background((plugin.trusted ? Color.green : Color.orange).opacity(0.14), in: Capsule())
-                        .foregroundStyle(plugin.trusted ? .green : .orange)
+                    PluginBadge(text: plugin.trusted ? L.t("trusted", "已信任") : L.t("untrusted", "未信任"), color: plugin.trusted ? .green : .orange)
+                    if !plugin.enabled {
+                        PluginBadge(text: L.t("disabled", "已停用"), color: .secondary)
+                    }
                 }
 
-                if let description = plugin.manifest.description, !description.isEmpty {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                HStack(spacing: 10) {
-                    Text(plugin.manifest.id)
-                    if let author = plugin.manifest.author, !author.isEmpty {
-                        Text("by \(author)")
-                    }
-                    if let protocols = plugin.manifest.protocols, !protocols.isEmpty {
-                        Text(protocols.joined(separator: ", "))
-                    }
-                    if let extensions = plugin.manifest.fileExtensions, !extensions.isEmpty {
-                        Text(extensions.map { ".\($0)" }.joined(separator: " "))
-                    }
-                    if let engineCommand = plugin.manifest.engineCommand, !engineCommand.isEmpty {
-                        Text(engineCommand)
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-
-                if let permissions = plugin.manifest.permissions, !permissions.isEmpty {
-                    FlowLine(items: permissions.map { "perm:\($0)" } + (plugin.manifest.urlPatterns ?? []).prefix(2).map { "match:\($0)" })
-                }
+                Text(pluginDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer()
 
-            Toggle("", isOn: Binding(
-                get: { plugin.trusted },
-                set: { newValue in onTrust(newValue) }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .help(plugin.trusted ? "Trusted plugin" : "Trust plugin before enabling command execution")
+            HStack(spacing: 14) {
+                VStack(spacing: 4) {
+                    Toggle("", isOn: Binding(
+                        get: { plugin.trusted },
+                        set: { newValue in onTrust(newValue) }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    Text(L.t("Trust", "信任"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .help(plugin.trusted ? L.t("Trusted plugin", "受信任插件") : L.t("Trust plugin before enabling command execution", "启用命令执行前需要先信任插件"))
 
-            Toggle("", isOn: Binding(
-                get: { plugin.enabled },
-                set: { newValue in onToggle(newValue) }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
+                VStack(spacing: 4) {
+                    Toggle("", isOn: Binding(
+                        get: { plugin.enabled },
+                        set: { newValue in onToggle(newValue) }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    Text(L.t("Enable", "启用"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             Menu {
-                Button("Settings", action: onSettings)
-                Button("Reveal in Finder", action: onReveal)
+                Button(L.t("Settings", "设置"), action: onSettings)
+                Button(L.t("Reveal in Finder", "在 Finder 中显示"), action: onReveal)
                 if let homepage = plugin.manifest.homepage, let url = URL(string: homepage) {
-                    Button("Open Homepage") {
+                    Button(L.t("Open Homepage", "打开主页")) {
                         NSWorkspace.shared.open(url)
                     }
                 }
                 Divider()
-                Button("Remove", role: .destructive, action: onRemove)
+                Button(L.t("Remove", "移除"), role: .destructive, action: onRemove)
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
             .frame(width: 28)
         }
-        .padding(10)
+        .padding(12)
+        .frame(minHeight: 86)
         .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor).opacity(0.75))
+        }
+    }
+
+    private var pluginDescription: String {
+        if let description = plugin.manifest.description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
+            return description
+        }
+        switch plugin.manifest.kind?.lowercased() {
+        case "extractor":
+            return L.t("Detects downloadable resources from matching websites.", "从匹配的网站中检测可下载资源。")
+        case "engine":
+            return L.t("Runs an external download engine for supported links.", "为支持的链接调用外部下载引擎。")
+        default:
+            return L.t("Extends download capture and processing.", "扩展下载捕获和处理能力。")
+        }
     }
 
     private var pluginIcon: String {
@@ -3463,6 +4233,21 @@ private struct PluginRow: View {
         case "sniffer": "antenna.radiowaves.left.and.right"
         default: "puzzlepiece.extension"
         }
+    }
+}
+
+private struct PluginBadge: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.14), in: Capsule())
+            .foregroundStyle(color)
     }
 }
 
@@ -3515,13 +4300,13 @@ private struct SchedulerPanel: View {
     }
 
     private var scheduledSummary: String {
-        guard schedulerEnabled else { return "Scheduler is off." }
+        guard schedulerEnabled else { return L.t("Scheduler is off.", "计划任务已关闭。") }
         let startText = startDate.wrappedValue.formatted(date: repeatsDaily ? .omitted : .abbreviated, time: .shortened)
         if stopEnabled {
             let stopText = stopDate.wrappedValue.formatted(date: repeatsDaily ? .omitted : .abbreviated, time: .shortened)
-            return repeatsDaily ? "Every day: start at \(startText), stop at \(stopText)." : "Start at \(startText), stop at \(stopText)."
+            return repeatsDaily ? "\(L.t("Every day", "每天")): \(L.t("start at", "开始于")) \(startText), \(L.t("stop at", "停止于")) \(stopText)." : "\(L.t("Start at", "开始于")) \(startText), \(L.t("stop at", "停止于")) \(stopText)."
         }
-        return repeatsDaily ? "Every day: start queue at \(startText)." : "Start queue at \(startText)."
+        return repeatsDaily ? "\(L.t("Every day", "每天")): \(L.t("start queue at", "开始队列于")) \(startText)." : "\(L.t("Start queue at", "开始队列于")) \(startText)."
     }
 
     var body: some View {
@@ -3531,9 +4316,9 @@ private struct SchedulerPanel: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Scheduler")
+                    Text(L.t("Scheduler", "计划任务"))
                         .font(.title3.weight(.semibold))
-                    Text("Start and stop the download queue automatically")
+                    Text(L.t("Start and stop the download queue automatically", "自动开始和停止下载队列"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -3544,33 +4329,33 @@ private struct SchedulerPanel: View {
             Divider()
 
             Form {
-                Section("Schedule") {
-                    Toggle("Enable scheduler", isOn: $schedulerEnabled)
-                    Toggle("Repeat every day", isOn: $repeatsDaily)
+                Section(L.t("Schedule", "计划")) {
+                    Toggle(L.t("Enable scheduler", "启用计划任务"), isOn: $schedulerEnabled)
+                    Toggle(L.t("Repeat every day", "每天重复"), isOn: $repeatsDaily)
 
                     if repeatsDaily {
-                        DatePicker("Start queue at", selection: startDate, displayedComponents: [.hourAndMinute])
-                        Toggle("Stop queue automatically", isOn: $stopEnabled)
+                        DatePicker(L.t("Start queue at", "开始队列于"), selection: startDate, displayedComponents: [.hourAndMinute])
+                        Toggle(L.t("Stop queue automatically", "自动停止队列"), isOn: $stopEnabled)
                         if stopEnabled {
-                            DatePicker("Stop queue at", selection: stopDate, displayedComponents: [.hourAndMinute])
+                            DatePicker(L.t("Stop queue at", "停止队列于"), selection: stopDate, displayedComponents: [.hourAndMinute])
                         }
                     } else {
-                        DatePicker("Start queue at", selection: startDate, displayedComponents: [.date, .hourAndMinute])
-                        Toggle("Stop queue automatically", isOn: $stopEnabled)
+                        DatePicker(L.t("Start queue at", "开始队列于"), selection: startDate, displayedComponents: [.date, .hourAndMinute])
+                        Toggle(L.t("Stop queue automatically", "自动停止队列"), isOn: $stopEnabled)
                         if stopEnabled {
-                            DatePicker("Stop queue at", selection: stopDate, displayedComponents: [.date, .hourAndMinute])
+                            DatePicker(L.t("Stop queue at", "停止队列于"), selection: stopDate, displayedComponents: [.date, .hourAndMinute])
                         }
                     }
                 }
 
-                Section("Queue") {
-                    Stepper("Maximum concurrent downloads: \(manager.maximumConcurrentDownloads)", value: $manager.maximumConcurrentDownloads, in: 1...16)
-                    Text(manager.queueStatusText)
+                Section(L.t("Queue", "队列")) {
+                    Stepper("\(L.t("Maximum concurrent downloads", "最大并发下载数")): \(manager.maximumConcurrentDownloads)", value: $manager.maximumConcurrentDownloads, in: 1...16)
+                    Text(L.runtime(manager.queueStatusText))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Status") {
+                Section(L.t("Status", "状态")) {
                     Label(scheduledSummary, systemImage: schedulerEnabled ? "checkmark.circle.fill" : "pause.circle")
                         .foregroundStyle(schedulerEnabled ? .green : .secondary)
                 }
@@ -3581,14 +4366,14 @@ private struct SchedulerPanel: View {
             Divider()
 
             HStack {
-                Button("Start Queue Now") {
+                Button(L.t("Start Queue Now", "立即开始队列")) {
                     manager.startQueue()
                 }
-                Button("Stop Queue") {
+                Button(L.t("Stop Queue", "停止队列")) {
                     manager.stopQueue()
                 }
                 Spacer()
-                Button("Done") {
+                Button(L.t("Done", "完成")) {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -3607,7 +4392,14 @@ private struct TellFriendPanel: View {
     private let shareURL = URL(string: "https://github.com/itworksig/Fast-Native-Download-Manager")!
 
     private var shareText: String {
-        """
+        if AppLanguage.current == .chineseSimplified {
+            return """
+            我正在使用 Fast Native Download Manager，这是一个原生 macOS 下载管理器，支持浏览器捕获、队列计划、分段下载，以及 yt-dlp/ffmpeg。
+
+            \(shareURL.absoluteString)
+            """
+        }
+        return """
         I am using Fast Native Download Manager, a native macOS download manager with browser capture, queue scheduling, segmented downloads, and yt-dlp/ffmpeg support.
 
         \(shareURL.absoluteString)
@@ -3624,9 +4416,9 @@ private struct TellFriendPanel: View {
                     .background(Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Tell a Friend")
+                    Text(L.t("Tell a Friend", "推荐好友"))
                         .font(.title3.weight(.semibold))
-                    Text("Share \(appName) with someone who downloads a lot.")
+                    Text(L.t("Share \(appName) with someone who downloads a lot.", "把 \(appName) 分享给经常下载的朋友。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -3637,7 +4429,7 @@ private struct TellFriendPanel: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 14) {
-                Text("Message")
+                Text(L.t("Message", "消息"))
                     .font(.headline)
 
                 Text(shareText)
@@ -3654,19 +4446,19 @@ private struct TellFriendPanel: View {
                     Button {
                         copyShareText()
                     } label: {
-                        Label(copied ? "Copied" : "Copy Message", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        Label(copied ? L.t("Copied", "已复制") : L.t("Copy Message", "复制消息"), systemImage: copied ? "checkmark" : "doc.on.doc")
                     }
 
                     Button {
                         composeEmail()
                     } label: {
-                        Label("Email", systemImage: "envelope")
+                        Label(L.t("Email", "邮件"), systemImage: "envelope")
                     }
 
                     Button {
                         openSystemShare()
                     } label: {
-                        Label("Share...", systemImage: "square.and.arrow.up")
+                        Label(L.t("Share...", "分享..."), systemImage: "square.and.arrow.up")
                     }
 
                     Spacer()
@@ -3678,7 +4470,7 @@ private struct TellFriendPanel: View {
 
             HStack {
                 Spacer()
-                Button("Done") {
+                Button(L.t("Done", "完成")) {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -3853,7 +4645,7 @@ private struct AddDownloadSheet: View {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 30))
                     .foregroundStyle(.green)
-                Text("Download File Info")
+                Text(L.t("Download File Info", "下载文件信息"))
                     .font(.title3.weight(.semibold))
                 Spacer()
                 if isChecking {
@@ -3870,21 +4662,21 @@ private struct AddDownloadSheet: View {
                         .frame(width: 520)
                 }
                 GridRow {
-                    fieldLabel("File name")
-                    TextField("File name", text: $fileName)
+                    fieldLabel(L.t("File name", "文件名"))
+                    TextField(L.t("File name", "文件名"), text: $fileName)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 520)
                 }
                 GridRow {
-                    fieldLabel("Size")
+                    fieldLabel(L.t("Size", "大小"))
                     Text(size)
                         .foregroundStyle(size == "Unknown" ? .secondary : .primary)
                 }
                 GridRow {
-                    fieldLabel("Category")
+                    fieldLabel(L.t("Category", "分类"))
                     Picker("", selection: $category) {
                         ForEach(downloadableCategories) { category in
-                            Label(category.rawValue, systemImage: category.symbol)
+                            Label(category.localizedTitle, systemImage: category.symbol)
                                 .tag(category)
                         }
                     }
@@ -3892,7 +4684,7 @@ private struct AddDownloadSheet: View {
                     .frame(width: 220)
                 }
                 GridRow {
-                    fieldLabel("Engine")
+                    fieldLabel(L.t("Engine", "引擎"))
                     Picker("", selection: $engine) {
                         ForEach(DownloadEngineChoice.allCases) { engine in
                             Text(engine.rawValue).tag(engine)
@@ -3902,9 +4694,9 @@ private struct AddDownloadSheet: View {
                     .frame(width: 360)
                 }
                 GridRow {
-                    fieldLabel("Plugin")
+                    fieldLabel(L.t("Plugin", "插件"))
                     Picker("", selection: $selectedPluginID) {
-                        Text("Auto by URL").tag("")
+                        Text(L.t("Auto by URL", "按链接自动选择")).tag("")
                         Divider()
                         ForEach(pluginOptions) { plugin in
                             Text("\(plugin.name) · \(plugin.kind)").tag(plugin.id)
@@ -3914,7 +4706,7 @@ private struct AddDownloadSheet: View {
                     .frame(width: 300)
                 }
                 GridRow {
-                    fieldLabel("Save to")
+                    fieldLabel(L.t("Save to", "保存到"))
                     HStack(spacing: 8) {
                         Text(saveDirectory.path)
                             .lineLimit(1)
@@ -3923,7 +4715,7 @@ private struct AddDownloadSheet: View {
                             .padding(.horizontal, 8)
                             .frame(height: 28)
                             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                        Button("Browse...") {
+                        Button(L.t("Browse...", "浏览...")) {
                             chooseSaveDirectory()
                         }
                     }
@@ -3939,29 +4731,29 @@ private struct AddDownloadSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if let cookie = request.cookie, !cookie.isEmpty {
-                Text("Browser cookies captured: \(cookie.count) chars. They will be passed to the selected engine.")
+                Text(L.t("Browser cookies captured", "已捕获浏览器 Cookie") + ": \(cookie.count) " + L.t("chars. They will be passed to the selected engine.", "个字符，将传递给所选引擎。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("HTTP/HTTPS links are supported. The file can start now or wait in the queue.")
+                Text(L.t("HTTP/HTTPS links are supported. The file can start now or wait in the queue.", "支持 HTTP/HTTPS 链接。文件可以立即开始，也可以加入队列等待。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Picker("", selection: $startImmediately) {
-                Text("Start download now").tag(true)
-                Text("Add to queue").tag(false)
+                Text(L.t("Start download now", "立即开始下载")).tag(true)
+                Text(L.t("Add to queue", "加入队列")).tag(false)
             }
             .pickerStyle(.segmented)
             .frame(width: 360)
 
             HStack {
                 Spacer()
-                Button("Cancel") {
+                Button(L.t("Cancel", "取消")) {
                     onCancel()
                     dismiss()
                 }
-                Button(startImmediately ? "Start Download" : "Add to Queue") {
+                Button(startImmediately ? L.t("Start Download", "开始下载") : L.t("Add to Queue", "加入队列")) {
                     var headers = request.headers
                     if selectedPluginID.isEmpty {
                         headers.removeValue(forKey: DownloadManager.pluginIDHeaderKey)
@@ -4048,15 +4840,22 @@ private struct AddDownloadSheet: View {
             }
             if let normalizedURL = draft.normalizedURL, let preset = DownloadManager.sitePreset(for: normalizedURL) {
                 engine = preset.engine
-                sitePresetMessage = "\(preset.name) preset: best quality, cookies, naming, and merge handled by yt-dlp."
+                sitePresetMessage = sitePresetDescription(preset)
             } else {
                 if engine == .automatic || engine == .ytdlp {
                     engine = AppPreferences.defaultEngine
                 }
                 sitePresetMessage = nil
             }
-            metadataMessage = draft.errorMessage.map { "Size check unavailable: \($0)" }
+            metadataMessage = draft.errorMessage.map { "\(L.t("Size check unavailable", "无法探测大小")): \(L.runtime($0))" }
         }
+    }
+
+    private func sitePresetDescription(_ preset: SiteDownloadPreset) -> String {
+        if preset.engine == .amazon {
+            return "\(preset.name) \(L.t("preset: single plain GET connection to avoid signed URL Range failures.", "预设：使用单连接普通 GET，避免签名链接 Range 请求失败。"))"
+        }
+        return "\(preset.name) \(L.t("preset: best quality, cookies, naming, and merge handled by yt-dlp.", "预设：由 yt-dlp 处理最佳质量、Cookie、命名和合并。"))"
     }
 
     private func loadPluginOptions() -> [PluginPickerOption] {
@@ -4080,7 +4879,7 @@ private struct AddDownloadSheet: View {
             return PluginPickerOption(
                 id: manifest.id,
                 name: manifest.name,
-                kind: manifest.kind?.capitalized ?? "Plugin"
+                kind: manifest.kind?.capitalized ?? L.t("Plugin", "插件")
             )
         }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -4092,7 +4891,7 @@ private struct AddDownloadSheet: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = saveDirectory
-        panel.prompt = "Choose"
+        panel.prompt = L.t("Choose", "选择")
         if panel.runModal() == .OK, let url = panel.url {
             saveDirectory = url
         }
@@ -4118,16 +4917,16 @@ private struct GrabberResourcesPanel: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.blue)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Detected resources")
+                    Text(L.t("Detected resources", "检测到的资源"))
                         .font(.title3.weight(.semibold))
-                    Text("\(resources.count) downloadable resource(s) captured from Chrome")
+                    Text("\(resources.count) \(L.t("downloadable resource(s) captured from Chrome", "个从浏览器捕获的可下载资源"))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Clear", action: onClear)
+                Button(L.t("Clear", "清除"), action: onClear)
                     .disabled(resources.isEmpty)
-                Button("Done") { dismiss() }
+                Button(L.t("Done", "完成")) { dismiss() }
             }
             .padding(16)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -4137,18 +4936,18 @@ private struct GrabberResourcesPanel: View {
 
             if resources.isEmpty {
                 PlaceholderDetailPanel(
-                    title: "No resources detected yet",
-                    message: "Open a page in Chrome, play media or click the extension icon to scan the page."
+                    title: L.t("No resources detected yet", "尚未检测到资源"),
+                    message: L.t("Open a page in Chrome, play media or click the extension icon to scan the page.", "在浏览器中打开页面、播放媒体，或点击扩展图标扫描页面。")
                 )
                 .padding(16)
             } else {
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
-                        grabberHeader("Type", width: 74)
-                        grabberHeader("File Name", width: 260)
-                        grabberHeader("Host", width: 180)
-                        grabberHeader("Size", width: 90)
-                        grabberHeader("Confidence", width: 110)
+                        grabberHeader(L.t("Type", "类型"), width: 74)
+                        grabberHeader(L.t("File Name", "文件名"), width: 260)
+                        grabberHeader(L.t("Host", "主机"), width: 180)
+                        grabberHeader(L.t("Size", "大小"), width: 90)
+                        grabberHeader(L.t("Confidence", "置信度"), width: 110)
                         grabberHeader("URL", width: 330)
                     }
                     .frame(height: 32)
@@ -4187,7 +4986,7 @@ private struct GrabberResourcesPanel: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                Button("Download Selected") {
+                Button(L.t("Download Selected", "下载所选")) {
                     if let selectedResource {
                         onDownload(selectedResource.downloadRequest)
                     }
@@ -4279,7 +5078,7 @@ private struct NativeSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Categories")
+                Text(L.t("Categories", "分类"))
                     .font(.headline)
                 Spacer()
             }
@@ -4292,31 +5091,31 @@ private struct NativeSidebar: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    NativeTreeRow(title: "All Downloads", symbol: "folder.fill", tint: .yellow, selected: selectedCategory == .all, count: count(for: .all)) {
+                    NativeTreeRow(title: Category.all.localizedTitle, symbol: "folder.fill", tint: .yellow, selected: selectedCategory == .all, count: count(for: .all)) {
                         selectedCategory = .all
                     }
-                    NativeTreeChild(title: "Video", symbol: "film.fill", tint: .teal, category: .video, selectedCategory: $selectedCategory, count: count(for: .video))
-                    NativeTreeChild(title: "Audio", symbol: "music.note", tint: .pink, category: .audio, selectedCategory: $selectedCategory, count: count(for: .audio))
-                    NativeTreeChild(title: "Archive", symbol: "archivebox.fill", tint: .orange, category: .archive, selectedCategory: $selectedCategory, count: count(for: .archive))
-                    NativeTreeChild(title: "App", symbol: "app.gift.fill", tint: .indigo, category: .app, selectedCategory: $selectedCategory, count: count(for: .app))
-                    NativeTreeChild(title: "Document", symbol: "doc.text.fill", tint: .blue, category: .document, selectedCategory: $selectedCategory, count: count(for: .document))
-                    NativeTreeChild(title: "BitTorrent", symbol: "point.3.connected.trianglepath.dotted", tint: .purple, category: .torrent, selectedCategory: $selectedCategory, count: count(for: .torrent))
-                    NativeTreeChild(title: "eD2K", symbol: "link.circle.fill", tint: .cyan, category: .ed2k, selectedCategory: $selectedCategory, count: count(for: .ed2k))
+                    NativeTreeChild(title: Category.video.localizedTitle, symbol: "film.fill", tint: .teal, category: .video, selectedCategory: $selectedCategory, count: count(for: .video))
+                    NativeTreeChild(title: Category.audio.localizedTitle, symbol: "music.note", tint: .pink, category: .audio, selectedCategory: $selectedCategory, count: count(for: .audio))
+                    NativeTreeChild(title: Category.archive.localizedTitle, symbol: "archivebox.fill", tint: .orange, category: .archive, selectedCategory: $selectedCategory, count: count(for: .archive))
+                    NativeTreeChild(title: Category.app.localizedTitle, symbol: "app.gift.fill", tint: .indigo, category: .app, selectedCategory: $selectedCategory, count: count(for: .app))
+                    NativeTreeChild(title: Category.document.localizedTitle, symbol: "doc.text.fill", tint: .blue, category: .document, selectedCategory: $selectedCategory, count: count(for: .document))
+                    NativeTreeChild(title: Category.torrent.localizedTitle, symbol: "point.3.connected.trianglepath.dotted", tint: .purple, category: .torrent, selectedCategory: $selectedCategory, count: count(for: .torrent))
+                    NativeTreeChild(title: Category.ed2k.localizedTitle, symbol: "link.circle.fill", tint: .cyan, category: .ed2k, selectedCategory: $selectedCategory, count: count(for: .ed2k))
 
                     NativeDivider()
-                    NativeTreeRow(title: "Unfinished", symbol: "folder.badge.minus", tint: .orange, selected: selectedCategory == .unfinished, count: count(for: .unfinished)) {
+                    NativeTreeRow(title: Category.unfinished.localizedTitle, symbol: "folder.badge.minus", tint: .orange, selected: selectedCategory == .unfinished, count: count(for: .unfinished)) {
                         selectedCategory = .unfinished
                     }
-                    NativeTreeRow(title: "Finished", symbol: "checkmark.seal.fill", tint: .green, selected: selectedCategory == .finished, count: count(for: .finished)) {
+                    NativeTreeRow(title: Category.finished.localizedTitle, symbol: "checkmark.seal.fill", tint: .green, selected: selectedCategory == .finished, count: count(for: .finished)) {
                         selectedCategory = .finished
                     }
                     NativeDivider()
-                    NativeTreeRow(title: "Queues", symbol: "tray.2.fill", tint: .yellow, selected: selectedCategory == .active, count: count(for: .active)) {
+                    NativeTreeRow(title: L.t("Queues", "队列"), symbol: "tray.2.fill", tint: .yellow, selected: selectedCategory == .active, count: count(for: .active)) {
                         selectedCategory = .active
                     }
-                    NativeTreeChild(title: "Main download", symbol: "folder.fill", tint: .yellow, category: .mainDownload, selectedCategory: $selectedCategory, count: count(for: .mainDownload))
-                    NativeTreeChild(title: "Synchronization", symbol: "arrow.triangle.2.circlepath", tint: .green, category: .synchronization, selectedCategory: $selectedCategory, count: count(for: .synchronization))
-                    NativeTreeChild(title: "Queue # 3", symbol: "folder.fill", tint: .green, category: .queue3, selectedCategory: $selectedCategory, count: count(for: .queue3))
+                    NativeTreeChild(title: Category.mainDownload.localizedTitle, symbol: "folder.fill", tint: .yellow, category: .mainDownload, selectedCategory: $selectedCategory, count: count(for: .mainDownload))
+                    NativeTreeChild(title: Category.synchronization.localizedTitle, symbol: "arrow.triangle.2.circlepath", tint: .green, category: .synchronization, selectedCategory: $selectedCategory, count: count(for: .synchronization))
+                    NativeTreeChild(title: Category.queue3.localizedTitle, symbol: "folder.fill", tint: .green, category: .queue3, selectedCategory: $selectedCategory, count: count(for: .queue3))
                 }
                 .padding(10)
             }
@@ -4440,7 +5239,7 @@ private struct NativeDownloadTable: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("Search downloads", text: $searchText)
+                    TextField(L.t("Search downloads", "搜索下载"), text: $searchText)
                         .textFieldStyle(.plain)
                     if !searchText.isEmpty {
                         Button {
@@ -4454,15 +5253,15 @@ private struct NativeDownloadTable: View {
                     Divider()
                         .frame(height: 18)
                     Menu {
-                        Button("Retry Failed", action: onRetryFailed)
-                        Button("Restart Visible Downloads", action: onRestartVisible)
-                        Button("Move Completed...", action: onMoveCompleted)
-                        Button("Edit Properties...", action: onEditProperties)
+                        Button(L.t("Retry Failed", "重试失败任务"), action: onRetryFailed)
+                        Button(L.t("Restart Visible Downloads", "重新开始可见任务"), action: onRestartVisible)
+                        Button(L.t("Move Completed...", "移动已完成..."), action: onMoveCompleted)
+                        Button(L.t("Edit Properties...", "编辑属性..."), action: onEditProperties)
                         Divider()
-                        Button("Delete Visible Downloads", role: .destructive, action: onDeleteVisible)
-                        Button("Delete Failed/Canceled", role: .destructive, action: onDeleteFailed)
+                        Button(L.t("Delete Visible Downloads", "删除可见任务"), role: .destructive, action: onDeleteVisible)
+                        Button(L.t("Delete Failed/Canceled", "删除失败/已取消"), role: .destructive, action: onDeleteFailed)
                     } label: {
-                        Label("Batch", systemImage: "checklist")
+                        Label(L.t("Batch", "批量"), systemImage: "checklist")
                     }
                     .menuStyle(.borderlessButton)
                 }
@@ -4557,13 +5356,13 @@ private struct NativeDownloadHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            headerCell("File Name", width: columns.file)
+            headerCell(L.t("File Name", "文件名"), width: columns.file)
             headerCell("Q", width: columns.queue)
-            headerCell("Size", width: columns.size)
-            headerCell("Status", width: columns.status)
-            headerCell("Time left", width: columns.timeLeft)
-            headerCell("Transfer rate", width: columns.transferRate)
-            headerCell("Description", width: columns.description)
+            headerCell(L.t("Size", "大小"), width: columns.size)
+            headerCell(L.t("Status", "状态"), width: columns.status)
+            headerCell(L.t("Time left", "剩余时间"), width: columns.timeLeft)
+            headerCell(L.t("Transfer rate", "传输速度"), width: columns.transferRate)
+            headerCell(L.t("Description", "描述"), width: columns.description)
             headerCell("", width: columns.actions)
         }
         .font(.callout.weight(.semibold))
@@ -4626,16 +5425,16 @@ private struct NativeDownloadRow: View {
             tableCell(width: columns.actions) {
                 HStack(spacing: 8) {
                     Menu {
-                        Button("Properties", action: onProperties)
+                        Button(L.t("Properties", "属性"), action: onProperties)
                         Divider()
-                        Button("Open File", action: onOpenFile)
-                        Button("Show in Finder", action: onRevealInFinder)
+                        Button(L.t("Open File", "打开文件"), action: onOpenFile)
+                        Button(L.t("Show in Finder", "在 Finder 中显示"), action: onRevealInFinder)
                         Divider()
-                        Button("Copy URL", action: onCopyURL)
-                        Button("Copy File Name", action: onCopyFileName)
-                        Button("Copy Save Path", action: onCopySavePath)
+                        Button(L.t("Copy URL", "复制链接"), action: onCopyURL)
+                        Button(L.t("Copy File Name", "复制文件名"), action: onCopyFileName)
+                        Button(L.t("Copy Save Path", "复制保存路径"), action: onCopySavePath)
                         Divider()
-                        Button("Delete Record", role: .destructive, action: onDelete)
+                        Button(L.t("Delete Record", "删除记录"), role: .destructive, action: onDelete)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                             .foregroundStyle(.secondary)
@@ -4644,7 +5443,7 @@ private struct NativeDownloadRow: View {
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
-                    .help("More actions")
+                    .help(L.t("More actions", "更多操作"))
 
                     Button(action: onDelete) {
                         Image(systemName: "trash")
@@ -4653,7 +5452,7 @@ private struct NativeDownloadRow: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Delete record")
+                    .help(L.t("Delete record", "删除记录"))
                 }
             }
         }
@@ -4665,16 +5464,16 @@ private struct NativeDownloadRow: View {
             Rectangle().fill(Color(nsColor: .separatorColor).opacity(0.55)).frame(height: 1)
         }
         .contextMenu {
-            Button("Properties", action: onProperties)
+            Button(L.t("Properties", "属性"), action: onProperties)
             Divider()
-            Button("Open File", action: onOpenFile)
-            Button("Show in Finder", action: onRevealInFinder)
+            Button(L.t("Open File", "打开文件"), action: onOpenFile)
+            Button(L.t("Show in Finder", "在 Finder 中显示"), action: onRevealInFinder)
             Divider()
-            Button("Copy URL", action: onCopyURL)
-            Button("Copy File Name", action: onCopyFileName)
-            Button("Copy Save Path", action: onCopySavePath)
+            Button(L.t("Copy URL", "复制链接"), action: onCopyURL)
+            Button(L.t("Copy File Name", "复制文件名"), action: onCopyFileName)
+            Button(L.t("Copy Save Path", "复制保存路径"), action: onCopySavePath)
             Divider()
-            Button("Delete Record", role: .destructive, action: onDelete)
+            Button(L.t("Delete Record", "删除记录"), role: .destructive, action: onDelete)
         }
     }
 
@@ -4690,24 +5489,24 @@ private struct NativeDownloadRow: View {
     private var statusText: String {
         switch download.status {
         case .downloading: "\(Int(download.progress * 100))%"
-        case .paused, .complete, .queued, .verifying, .canceled, .failed: download.status.rawValue
+        case .paused, .complete, .queued, .verifying, .canceled, .failed: download.status.localizedTitle
         }
     }
 
     private var description: String {
         if download.status == .failed || download.status == .canceled {
-            return download.detail
+            return L.runtime(download.detail)
         }
 
         switch download.category {
-        case .video: return "Video download"
-        case .audio: return "Audio download"
-        case .app: return "Application package, resume capable"
-        case .archive: return "Compressed archive"
-        case .document: return "Document download"
-        case .torrent: return "BitTorrent task"
-        case .ed2k: return "eD2K task"
-        default: return "Captured download"
+        case .video: return L.t("Video download", "视频下载")
+        case .audio: return L.t("Audio download", "音频下载")
+        case .app: return L.t("App", "应用")
+        case .archive: return L.t("Compressed archive", "压缩文件")
+        case .document: return L.t("Document download", "文档下载")
+        case .torrent: return L.t("BitTorrent task", "BitTorrent 任务")
+        case .ed2k: return L.t("eD2K task", "eD2K 任务")
+        default: return L.t("Captured download", "捕获的下载")
         }
     }
 
@@ -4745,8 +5544,9 @@ private struct NativeDownloadDetails: View {
     let onResume: () -> Void
     let onPause: () -> Void
     let onCancel: () -> Void
+    let onOpenFile: () -> Void
     let onSaveSettings: () -> Void
-    @State private var selectedTab = "Download status"
+    @State private var selectedTab = "status"
 
     private var connections: [ConnectionSlice] {
         connectionSlices(for: download)
@@ -4755,30 +5555,30 @@ private struct NativeDownloadDetails: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("", selection: $selectedTab) {
-                Text("Download status").tag("Download status")
-                Text("Speed Limiter").tag("Speed Limiter")
-                Text("Options on completion").tag("Options on completion")
-                Text("Request Options").tag("Request Options")
-                Text("Media Formats").tag("Media Formats")
-                Text("Logs").tag("Logs")
+                Text(L.t("Download status", "下载状态")).tag("status")
+                Text(L.t("Speed Limiter", "速度限制")).tag("speed")
+                Text(L.t("Options on completion", "完成后选项")).tag("completion")
+                Text(L.t("Request Options", "请求选项")).tag("request")
+                Text(L.t("Media Formats", "媒体格式")).tag("formats")
+                Text(L.t("Logs", "日志")).tag("logs")
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 650, alignment: .leading)
 
             Group {
                 switch selectedTab {
-                case "Speed Limiter":
+                case "speed":
                     SpeedLimiterPanel(download: download, onSave: onSaveSettings)
-                case "Options on completion":
+                case "completion":
                     CompletionActionsPanel(download: download, onSave: onSaveSettings)
-                case "Request Options":
+                case "request":
                     RequestOptionsPanel(download: download, onSave: onSaveSettings)
-                case "Media Formats":
+                case "formats":
                     MediaFormatsPanel(download: download, onSave: onSaveSettings)
-                case "Logs":
+                case "logs":
                     DownloadLogsPanel(download: download)
                 default:
-                    DownloadStatusPanel(download: download, connections: connections, onResume: onResume, onPause: onPause, onCancel: onCancel)
+                    DownloadStatusPanel(download: download, connections: connections, onResume: onResume, onPause: onPause, onCancel: onCancel, onOpenFile: onOpenFile)
                 }
             }
         }
@@ -4793,6 +5593,11 @@ private struct DownloadStatusPanel: View {
     let onResume: () -> Void
     let onPause: () -> Void
     let onCancel: () -> Void
+    let onOpenFile: () -> Void
+
+    private var canOpenFile: Bool {
+        download.status == .complete && FileManager.default.fileExists(atPath: download.destinationURL.path)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -4803,13 +5608,13 @@ private struct DownloadStatusPanel: View {
                         Text(download.url)
                             .lineLimit(1)
                     }
-                    detailRow("Status", download.detail, highlight: download.status == .downloading)
-                    detailRow("File size", download.size)
-                    detailRow("Downloaded", "\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) [ \(Int(download.progress * 100))% ]")
-                    detailRow("Transfer rate", download.speed)
-                    detailRow("Time left", download.eta)
-                    detailRow("Resume capability", download.resumeSupported ? "Yes" : "Unknown")
-                    detailRow("Save to", download.destinationURL.deletingLastPathComponent().path)
+                    detailRow(L.t("Status", "状态"), L.runtime(download.detail), highlight: download.status == .downloading)
+                    detailRow(L.t("File size", "文件大小"), L.runtime(download.size))
+                    detailRow(L.t("Downloaded", "已下载"), "\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) [ \(Int(download.progress * 100))% ]")
+                    detailRow(L.t("Transfer rate", "传输速度"), L.runtime(download.speed))
+                    detailRow(L.t("Time left", "剩余时间"), L.runtime(download.eta))
+                    detailRow(L.t("Resume capability", "续传能力"), download.resumeSupported ? L.t("Yes", "是") : L.t("Unknown", "未知"))
+                    detailRow(L.t("Save to", "保存到"), download.destinationURL.deletingLastPathComponent().path)
                 }
                 .font(.callout)
             }
@@ -4824,18 +5629,22 @@ private struct DownloadStatusPanel: View {
                 .frame(height: 18)
 
             HStack {
-                Button("<< Hide details") { }
+                Button(L.t("<< Hide details", "<< 隐藏详情")) { }
                     .buttonStyle(.bordered)
                 Spacer()
-                Button(download.status == .paused ? "Resume" : "Pause") {
+                if canOpenFile {
+                    Button(L.t("Open File", "打开文件"), action: onOpenFile)
+                        .buttonStyle(.borderedProminent)
+                }
+                Button(download.status == .paused ? L.t("Resume", "继续") : L.t("Pause", "暂停")) {
                     download.status == .paused ? onResume() : onPause()
                 }
                 .buttonStyle(.bordered)
-                Button("Cancel", action: onCancel)
+                Button(L.t("Cancel", "取消"), action: onCancel)
                     .buttonStyle(.bordered)
             }
 
-            Text("Start positions and download progress by connections")
+            Text(L.t("Start positions and download progress by connections", "各连接的起始位置和下载进度"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -4845,9 +5654,9 @@ private struct DownloadStatusPanel: View {
 
             VStack(spacing: 0) {
                 HStack {
-                    Text("N.").frame(width: 70, alignment: .leading)
-                    Text("Downloaded").frame(width: 150, alignment: .leading)
-                    Text("Info")
+                    Text(L.t("N.", "序号")).frame(width: 70, alignment: .leading)
+                    Text(L.t("Downloaded", "已下载")).frame(width: 150, alignment: .leading)
+                    Text(L.t("Info", "信息"))
                     Spacer()
                 }
                 .font(.callout.weight(.semibold))
@@ -4859,7 +5668,7 @@ private struct DownloadStatusPanel: View {
                     HStack {
                         Text("\(connection.part)").frame(width: 70, alignment: .leading)
                         Text(connection.progress, format: .percent.precision(.fractionLength(0))).frame(width: 150, alignment: .leading)
-                        Text(connection.speed == "--" ? download.status.rawValue : "Receiving data... \(connection.speed)")
+                        Text(connection.speed == "--" ? download.status.localizedTitle : "\(L.t("Receiving data...", "正在接收数据...")) \(connection.speed)")
                         Spacer()
                     }
                     .font(.callout)
@@ -4928,22 +5737,22 @@ private struct SpeedLimiterPanel: View {
 
     var body: some View {
         Form {
-            Section("Per-task speed limit") {
-                Toggle("Enable speed limit for this task", isOn: limitEnabled)
-                Stepper("Limit: \(limitKB) KB/s", value: $limitKB, in: 64...1_048_576, step: 64)
+            Section(L.t("Per-task speed limit", "单任务速度限制")) {
+                Toggle(L.t("Enable speed limit for this task", "为此任务启用速度限制"), isOn: limitEnabled)
+                Stepper("\(L.t("Limit", "限制")): \(limitKB) KB/s", value: $limitKB, in: 64...1_048_576, step: 64)
                     .disabled(download.speedLimitBytesPerSecond == 0)
                     .onChange(of: limitKB) { _, newValue in
                         guard download.speedLimitBytesPerSecond > 0 else { return }
                         download.speedLimitBytesPerSecond = Int64(max(64, newValue) * 1024)
                         onSave()
                     }
-                Text(download.speedLimitBytesPerSecond > 0 ? "Effective limit: \(ByteCountFormatter.string(fromByteCount: download.speedLimitBytesPerSecond, countStyle: .file))/s." : "No limit is applied to this task.")
+                Text(download.speedLimitBytesPerSecond > 0 ? "\(L.t("Effective limit", "实际限制")): \(ByteCountFormatter.string(fromByteCount: download.speedLimitBytesPerSecond, countStyle: .file))/s." : L.t("No limit is applied to this task.", "此任务未限速。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Queue behavior") {
-                Text("Queue concurrency is controlled in Options > Queue. This per-task limiter is applied while each segment writes data.")
+            Section(L.t("Queue behavior", "队列行为")) {
+                Text(L.t("Queue concurrency is controlled in Options > Queue. This per-task limiter is applied while each segment writes data.", "队列并发数在“选项 > 队列”中控制。此单任务限速会在每个分段写入数据时生效。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -4961,25 +5770,25 @@ private struct CompletionActionsPanel: View {
 
     var body: some View {
         Form {
-            Section("After download completes") {
-                Toggle("Open file", isOn: $download.openWhenComplete)
-                Toggle("Reveal in Finder", isOn: $download.revealWhenComplete)
-                Toggle("Verify SHA256", isOn: $download.verifySHA256WhenComplete)
-                Toggle("Verify MD5", isOn: $download.verifyMD5WhenComplete)
-                Toggle("Move into category folder", isOn: $download.autoMoveCategoryWhenComplete)
-                Toggle("Run plugin completion action", isOn: $download.runPluginActionWhenComplete)
+            Section(L.t("After download completes", "下载完成后")) {
+                Toggle(L.t("Open file", "打开文件"), isOn: $download.openWhenComplete)
+                Toggle(L.t("Reveal in Finder", "在 Finder 中显示"), isOn: $download.revealWhenComplete)
+                Toggle(L.t("Verify SHA256", "校验 SHA256"), isOn: $download.verifySHA256WhenComplete)
+                Toggle(L.t("Verify MD5", "校验 MD5"), isOn: $download.verifyMD5WhenComplete)
+                Toggle(L.t("Move into category folder", "移动到分类文件夹"), isOn: $download.autoMoveCategoryWhenComplete)
+                Toggle(L.t("Run plugin completion action", "运行插件完成动作"), isOn: $download.runPluginActionWhenComplete)
             }
 
-            Section("System action") {
-                Toggle("Sleep Mac after this task completes", isOn: $download.sleepWhenComplete)
-                Toggle("Shut down Mac after this task completes", isOn: $download.shutdownWhenComplete)
-                Text("Sleep and shutdown are only attempted after a successful completed status.")
+            Section(L.t("System action", "系统动作")) {
+                Toggle(L.t("Sleep Mac after this task completes", "此任务完成后让 Mac 睡眠"), isOn: $download.sleepWhenComplete)
+                Toggle(L.t("Shut down Mac after this task completes", "此任务完成后关闭 Mac"), isOn: $download.shutdownWhenComplete)
+                Text(L.t("Sleep and shutdown are only attempted after a successful completed status.", "只有任务成功完成后才会尝试睡眠或关机。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section {
-                Button("Save Actions", action: onSave)
+                Button(L.t("Save Actions", "保存动作"), action: onSave)
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -5009,14 +5818,14 @@ private struct RequestOptionsPanel: View {
 
     var body: some View {
         Form {
-            Section("HTTP request") {
+            Section(L.t("HTTP request", "HTTP 请求")) {
                 TextEditor(text: $headerText)
                     .font(.system(.caption, design: .monospaced))
                     .frame(minHeight: 78)
                     .overlay {
                         RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor))
                     }
-                Text("Headers use one line per key: value. Referer and User-Agent below override matching header lines.")
+                Text(L.t("Headers use one line per key: value. Referer and User-Agent below override matching header lines.", "请求头每行一个 key: value。下面的 Referer 和 User-Agent 会覆盖同名请求头。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("Cookie", text: $cookie)
@@ -5024,26 +5833,26 @@ private struct RequestOptionsPanel: View {
                 TextField("User-Agent", text: $userAgent)
             }
 
-            Section("Network") {
-                TextField("Proxy, e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080", text: $proxy)
+            Section(L.t("Network", "网络")) {
+                TextField(L.t("Proxy, e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080", "代理，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"), text: $proxy)
                 HStack {
-                    Button("Use System Proxy") {
+                    Button(L.t("Use System Proxy", "使用系统代理")) {
                         proxy = SystemProxyDetector.currentProxy() ?? ""
                     }
-                    Button("Use Default Proxy") {
+                    Button(L.t("Use Default Proxy", "使用默认代理")) {
                         proxy = UserDefaults.standard.string(forKey: AppPreferences.defaultProxyKey) ?? ""
                     }
-                    Button("Clear Proxy") {
+                    Button(L.t("Clear Proxy", "清除代理")) {
                         proxy = ""
                     }
                 }
-                Stepper("Connections: \(connections)", value: $connections, in: 1...16)
-                Stepper("Retry attempts: \(retryLimit)", value: $retryLimit, in: 0...20)
-                Stepper("Timeout: \(timeout) seconds", value: $timeout, in: 5...300, step: 5)
+                Stepper("\(L.t("Connections", "连接数")): \(connections)", value: $connections, in: 1...16)
+                Stepper("\(L.t("Retry attempts", "重试次数")): \(retryLimit)", value: $retryLimit, in: 0...20)
+                Stepper("\(L.t("Timeout", "超时")): \(timeout) \(L.t("seconds", "秒"))", value: $timeout, in: 5...300, step: 5)
             }
 
             Section {
-                Button("Save Request Options") {
+                Button(L.t("Save Request Options", "保存请求选项")) {
                     save()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -5125,9 +5934,9 @@ private struct BatchPropertiesPanel: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Batch Properties")
+                    Text(L.t("Batch Properties", "批量属性"))
                         .font(.title3.weight(.semibold))
-                    Text("\(downloads.count) task(s) in current view")
+                    Text("\(downloads.count) \(L.t("task(s) in current view", "个当前视图中的任务"))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -5137,55 +5946,55 @@ private struct BatchPropertiesPanel: View {
             Divider()
 
             Form {
-                Section("Request") {
-                    Toggle("Apply headers", isOn: $applyHeaders)
+                Section(L.t("Request", "请求")) {
+                    Toggle(L.t("Apply headers", "应用请求头"), isOn: $applyHeaders)
                     TextEditor(text: $headerText)
                         .font(.system(.caption, design: .monospaced))
                         .frame(minHeight: 76)
                         .disabled(!applyHeaders)
-                    Toggle("Apply cookie", isOn: $applyCookie)
+                    Toggle(L.t("Apply cookie", "应用 Cookie"), isOn: $applyCookie)
                     TextField("Cookie", text: $cookie)
                         .disabled(!applyCookie)
-                    Toggle("Apply proxy", isOn: $applyProxy)
+                    Toggle(L.t("Apply proxy", "应用代理"), isOn: $applyProxy)
                     TextField("http://127.0.0.1:7890 or socks5://127.0.0.1:1080", text: $proxy)
                         .disabled(!applyProxy)
                 }
 
-                Section("Engine") {
-                    Toggle("Apply engine", isOn: $applyEngine)
-                    Picker("Engine", selection: $engine) {
+                Section(L.t("Engine", "引擎")) {
+                    Toggle(L.t("Apply engine", "应用引擎"), isOn: $applyEngine)
+                    Picker(L.t("Engine", "引擎"), selection: $engine) {
                         ForEach(DownloadEngineChoice.allCases) { option in
                             Text(option.rawValue).tag(option)
                         }
                     }
                     .disabled(!applyEngine)
-                    Toggle("Apply yt-dlp format", isOn: $applyFormat)
+                    Toggle(L.t("Apply yt-dlp format", "应用 yt-dlp 格式"), isOn: $applyFormat)
                     TextField("bv*+ba/b or 137+140", text: $ytdlpFormat)
                         .disabled(!applyFormat)
                 }
 
-                Section("Category") {
-                    Toggle("Apply category", isOn: $applyCategory)
-                    Picker("Category", selection: $category) {
+                Section(L.t("Category", "分类")) {
+                    Toggle(L.t("Apply category", "应用分类"), isOn: $applyCategory)
+                    Picker(L.t("Category", "分类"), selection: $category) {
                         ForEach([Category.video, .audio, .archive, .app, .document, .torrent, .ed2k]) { option in
-                            Label(option.rawValue, systemImage: option.symbol).tag(option)
+                            Label(option.localizedTitle, systemImage: option.symbol).tag(option)
                         }
                     }
                     .disabled(!applyCategory)
                 }
 
-                Section("Network") {
-                    Toggle("Apply connections", isOn: $applyConnections)
-                    Stepper("Connections: \(connections)", value: $connections, in: 1...16)
+                Section(L.t("Network", "网络")) {
+                    Toggle(L.t("Apply connections", "应用连接数"), isOn: $applyConnections)
+                    Stepper("\(L.t("Connections", "连接数")): \(connections)", value: $connections, in: 1...16)
                         .disabled(!applyConnections)
-                    Toggle("Apply retry attempts", isOn: $applyRetry)
-                    Stepper("Retry attempts: \(retryLimit)", value: $retryLimit, in: 0...20)
+                    Toggle(L.t("Apply retry attempts", "应用重试次数"), isOn: $applyRetry)
+                    Stepper("\(L.t("Retry attempts", "重试次数")): \(retryLimit)", value: $retryLimit, in: 0...20)
                         .disabled(!applyRetry)
-                    Toggle("Apply timeout", isOn: $applyTimeout)
-                    Stepper("Timeout: \(timeout) seconds", value: $timeout, in: 5...300, step: 5)
+                    Toggle(L.t("Apply timeout", "应用超时"), isOn: $applyTimeout)
+                    Stepper("\(L.t("Timeout", "超时")): \(timeout) \(L.t("seconds", "秒"))", value: $timeout, in: 5...300, step: 5)
                         .disabled(!applyTimeout)
-                    Toggle("Apply speed limit", isOn: $applySpeedLimit)
-                    SpeedLimitStepper(title: "Task speed limit", value: $speedLimitBytesPerSecond)
+                    Toggle(L.t("Apply speed limit", "应用速度限制"), isOn: $applySpeedLimit)
+                    SpeedLimitStepper(title: L.t("Task speed limit", "任务速度限制"), value: $speedLimitBytesPerSecond)
                         .disabled(!applySpeedLimit)
                 }
             }
@@ -5194,9 +6003,9 @@ private struct BatchPropertiesPanel: View {
 
             Divider()
             HStack {
-                Button("Cancel") { dismiss() }
+                Button(L.t("Cancel", "取消")) { dismiss() }
                 Spacer()
-                Button("Apply") {
+                Button(L.t("Apply", "应用")) {
                     apply()
                     dismiss()
                 }
@@ -5269,22 +6078,22 @@ private struct MediaFormatsPanel: View {
     @State private var selectedVariantURL = ""
     @State private var selectedAudioURL = ""
     @State private var selectedSubtitleURL = ""
-    @State private var output = "Use yt-dlp format list for platform videos, or inspect HLS/DASH URLs before starting the final media download."
+    @State private var output = L.t("Use yt-dlp format list for platform videos, or inspect HLS/DASH URLs before starting the final media download.", "可为平台视频加载 yt-dlp 格式列表，或在开始最终媒体下载前检查 HLS/DASH 地址。")
     @State private var formats: [YTDLPFormatRow] = []
     @State private var manifestChoices: [ManifestChoiceRow] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Button(isLoading ? "Loading..." : "Load yt-dlp Formats") {
+                Button(isLoading ? L.t("Loading...", "加载中...") : L.t("Load yt-dlp Formats", "加载 yt-dlp 格式")) {
                     loadFormats()
                 }
                 .disabled(isLoading || download.sourceURL == nil)
-                Button(isLoading ? "Parsing..." : "Parse HLS/DASH") {
+                Button(isLoading ? L.t("Parsing...", "解析中...") : L.t("Parse HLS/DASH", "解析 HLS/DASH")) {
                     loadManifestVariants()
                 }
                 .disabled(isLoading || download.sourceURL == nil)
-                Button("Copy URL") {
+                Button(L.t("Copy URL", "复制链接")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(download.url, forType: .string)
                 }
@@ -5293,10 +6102,10 @@ private struct MediaFormatsPanel: View {
 
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                 GridRow {
-                    Text("yt-dlp format")
+                    Text(L.t("yt-dlp format", "yt-dlp 格式"))
                         .foregroundStyle(.secondary)
                     TextField("bestvideo+bestaudio/best or 137+140", text: $selectedFormatCode)
-                    Button("Save") {
+                    Button(L.t("Save", "保存")) {
                         download.ytdlpFormatCode = selectedFormatCode.trimmingCharacters(in: .whitespacesAndNewlines)
                         download.headers[DownloadManager.ytdlpFormatHeaderKey] = download.ytdlpFormatCode
                         download.mediaFormatSummary = download.ytdlpFormatCode.isEmpty ? "" : "yt-dlp format \(download.ytdlpFormatCode)"
@@ -5304,10 +6113,10 @@ private struct MediaFormatsPanel: View {
                     }
                 }
                 GridRow {
-                    Text("HLS/DASH variant")
+                    Text(L.t("HLS/DASH variant", "HLS/DASH 变体"))
                         .foregroundStyle(.secondary)
                     TextField("variant playlist or manifest URL", text: $selectedVariantURL)
-                    Button("Use") {
+                    Button(L.t("Use", "使用")) {
                         let trimmed = selectedVariantURL.trimmingCharacters(in: .whitespacesAndNewlines)
                         if trimmed.isEmpty {
                             download.headers.removeValue(forKey: DownloadManager.mediaVariantURLHeaderKey)
@@ -5319,7 +6128,7 @@ private struct MediaFormatsPanel: View {
                         }
                         onSave()
                     }
-                    Button("Use Manifest") {
+                    Button(L.t("Use Manifest", "使用清单")) {
                         download.headers[DownloadManager.mediaVariantURLHeaderKey] = download.url
                         download.headers[DownloadManager.engineHeaderKey] = DownloadEngineChoice.ffmpeg.rawValue
                         download.mediaFormatSummary = "Manifest \(download.url)"
@@ -5328,10 +6137,10 @@ private struct MediaFormatsPanel: View {
                     }
                 }
                 GridRow {
-                    Text("Audio track")
+                    Text(L.t("Audio track", "音轨"))
                         .foregroundStyle(.secondary)
                     TextField("optional audio rendition URL", text: $selectedAudioURL)
-                    Button("Use") {
+                    Button(L.t("Use", "使用")) {
                         let trimmed = selectedAudioURL.trimmingCharacters(in: .whitespacesAndNewlines)
                         if trimmed.isEmpty {
                             download.headers.removeValue(forKey: DownloadManager.mediaAudioURLHeaderKey)
@@ -5344,10 +6153,10 @@ private struct MediaFormatsPanel: View {
                     }
                 }
                 GridRow {
-                    Text("Subtitle track")
+                    Text(L.t("Subtitle track", "字幕轨"))
                         .foregroundStyle(.secondary)
                     TextField("optional subtitle rendition URL", text: $selectedSubtitleURL)
-                    Button("Use") {
+                    Button(L.t("Use", "使用")) {
                         let trimmed = selectedSubtitleURL.trimmingCharacters(in: .whitespacesAndNewlines)
                         if trimmed.isEmpty {
                             download.headers.removeValue(forKey: DownloadManager.mediaSubtitleURLHeaderKey)
@@ -5364,21 +6173,21 @@ private struct MediaFormatsPanel: View {
 
             if !formats.isEmpty {
                 HStack {
-                    Button("Best MP4") { selectFormat("bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]") }
-                    Button("Best Quality") { selectFormat("bv*+ba/b") }
-                    Button("Audio Only") { selectFormat("ba/bestaudio") }
+                    Button(L.t("Best MP4", "最佳 MP4")) { selectFormat("bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]") }
+                    Button(L.t("Best Quality", "最佳质量")) { selectFormat("bv*+ba/b") }
+                    Button(L.t("Audio Only", "仅音频")) { selectFormat("ba/bestaudio") }
                     Spacer()
                 }
 
                 VStack(spacing: 0) {
                     HStack {
                         Text("ID").frame(width: 70, alignment: .leading)
-                        Text("Ext").frame(width: 46, alignment: .leading)
-                        Text("Resolution").frame(width: 110, alignment: .leading)
+                        Text(L.t("Ext", "扩展")).frame(width: 46, alignment: .leading)
+                        Text(L.t("Resolution", "分辨率")).frame(width: 110, alignment: .leading)
                         Text("FPS").frame(width: 50, alignment: .leading)
-                        Text("Size").frame(width: 78, alignment: .leading)
-                        Text("Codecs").frame(width: 150, alignment: .leading)
-                        Text("Note").frame(maxWidth: .infinity, alignment: .leading)
+                        Text(L.t("Size", "大小")).frame(width: 78, alignment: .leading)
+                        Text(L.t("Codecs", "编码")).frame(width: 150, alignment: .leading)
+                        Text(L.t("Note", "备注")).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8)
@@ -5424,9 +6233,9 @@ private struct MediaFormatsPanel: View {
             if !manifestChoices.isEmpty {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("Type").frame(width: 74, alignment: .leading)
-                        Text("Name").frame(width: 160, alignment: .leading)
-                        Text("Quality").frame(width: 130, alignment: .leading)
+                        Text(L.t("Type", "类型")).frame(width: 74, alignment: .leading)
+                        Text(L.t("Name", "名称")).frame(width: 160, alignment: .leading)
+                        Text(L.t("Quality", "质量")).frame(width: 130, alignment: .leading)
                         Text("URL / Info").frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .font(.caption.weight(.semibold))
@@ -5775,16 +6584,16 @@ private struct DownloadLogsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Task Logs")
+                Text(L.t("Task Logs", "任务日志"))
                     .font(.headline)
                 Spacer()
-                Button("Copy") {
+                Button(L.t("Copy", "复制")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(download.logLines.joined(separator: "\n"), forType: .string)
                 }
             }
             ScrollView {
-                Text(download.logLines.isEmpty ? "No logs yet. Start or resume this task to collect request, retry, and engine output logs." : download.logLines.joined(separator: "\n"))
+                Text(download.logLines.isEmpty ? L.t("No logs yet. Start or resume this task to collect request, retry, and engine output logs.", "暂无日志。开始或继续此任务后，会收集请求、重试和引擎输出日志。") : download.logLines.joined(separator: "\n"))
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -5879,17 +6688,17 @@ private struct NativeStatusBar: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            Text("\(downloads.count) downloads")
+            Text("\(downloads.count) \(L.t("downloads", "个下载"))")
             Divider()
-            Text("Detected resources: \(resources.count)")
+            Text("\(L.t("Detected resources", "检测到的资源")): \(resources.count)")
             Divider()
-            Text("Total speed: \(totalSpeed)")
+            Text("\(L.t("Total speed", "总速度")): \(L.runtime(totalSpeed))")
             Divider()
-            Text(queueStatus)
-            Stepper("Max: \(maximumConcurrentDownloads)", value: $maximumConcurrentDownloads, in: 1...16)
-                .help("Maximum concurrent downloads")
+            Text(L.runtime(queueStatus))
+            Stepper("\(L.t("Max", "最大")): \(maximumConcurrentDownloads)", value: $maximumConcurrentDownloads, in: 1...16)
+                .help(L.t("Maximum concurrent downloads", "最大并发下载数"))
             Spacer()
-            Text("HTTP/HTTPS + Range resume engine")
+            Text(L.t("HTTP/HTTPS + Range resume engine", "HTTP/HTTPS + Range 续传引擎"))
         }
         .font(.caption)
         .foregroundStyle(.secondary)

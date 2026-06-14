@@ -189,6 +189,12 @@ async function buildResource(targetUrl, context = {}) {
   if (type === "ED2K" || isED2KUrl(targetUrl)) {
     headers[ENGINE_HEADER] = "eD2K";
   }
+  const platform = platformNameForUrl(targetUrl);
+  if (platform) {
+    headers[ENGINE_HEADER] = "yt-dlp";
+    headers[SITE_PRESET_HEADER] = platform;
+    headers[YTDLP_FORMAT_HEADER] = platformFormat(platform);
+  }
 
   return {
     url: targetUrl,
@@ -507,7 +513,8 @@ function looksDownloadable(url, contentType = "") {
 
   try {
     const parsed = new URL(url);
-    return /(^|\.)googlevideo\.com$/i.test(parsed.hostname)
+    return platformNameForUrl(url) === "imdb"
+      || /(^|\.)googlevideo\.com$/i.test(parsed.hostname)
       || /(^|\.)bilivideo\.com$/i.test(parsed.hostname)
       || /(^|\.)tiktokcdn\.com$/i.test(parsed.hostname)
       || /(^|\.)tiktokv\.com$/i.test(parsed.hostname)
@@ -564,7 +571,7 @@ function platformNameForUrl(value) {
     if (host.endsWith(".vimeo.com")) {
       return "vimeo";
     }
-    if (host === "imdb.com" || host.endsWith(".imdb.com")) {
+    if ((host === "imdb.com" || host.endsWith(".imdb.com")) && isImdbVideoUrl(url.href)) {
       return "imdb";
     }
     if (host === "x.com" || host.endsWith(".twitter.com")) {
@@ -600,6 +607,17 @@ function platformNameForUrl(value) {
     return "";
   } catch {
     return "";
+  }
+}
+
+function isImdbVideoUrl(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    return (host === "imdb.com" || host.endsWith(".imdb.com"))
+      && /^\/(?:video|videoplayer)\//i.test(url.pathname);
+  } catch {
+    return false;
   }
 }
 
@@ -732,7 +750,7 @@ function fileNameFromED2K(value) {
 
 function scanPageForDownloadableResources() {
   const pattern = /\.(mp4|m3u8|mpd|m4s|zip|dmg|torrent)(?:[?#][^\s"'<>]*)?$/i;
-  const platformPattern = /googlevideo\.com\/videoplayback|bilivideo\.com|vimeocdn\.com|tiktokcdn\.com|tiktokv\.com|fbcdn\.net|cdninstagram\.com|\/video\/tos|\/dash\/|\/hls\//i;
+  const platformPattern = /googlevideo\.com\/videoplayback|bilivideo\.com|vimeocdn\.com|tiktokcdn\.com|tiktokv\.com|fbcdn\.net|cdninstagram\.com|imdb\.com\/(?:video|videoplayer)\/|\/video\/tos|\/dash\/|\/hls\//i;
   const urls = new Set();
   const add = (value) => {
     if (!value || typeof value !== "string") {
@@ -756,7 +774,7 @@ function scanPageForDownloadableResources() {
 
   for (const script of document.scripts) {
     const text = script.textContent || "";
-    for (const match of text.matchAll(/(?:https?:\/\/[^\s"'<>]+?(?:\.(?:mp4|m3u8|mpd|m4s|zip|dmg|torrent)|googlevideo\.com\/videoplayback|bilivideo\.com|vimeocdn\.com|tiktokcdn\.com|tiktokv\.com|fbcdn\.net|cdninstagram\.com|\/video\/tos|\/dash\/|\/hls\/)[^\s"'<>]*|magnet:\?[^\s"'<>]+|ed2k:\/\/[^\s"'<>]+)/gi)) {
+    for (const match of text.matchAll(/(?:https?:\/\/[^\s"'<>]+?(?:\.(?:mp4|m3u8|mpd|m4s|zip|dmg|torrent)|googlevideo\.com\/videoplayback|bilivideo\.com|vimeocdn\.com|tiktokcdn\.com|tiktokv\.com|fbcdn\.net|cdninstagram\.com|imdb\.com\/(?:video|videoplayer)\/|\/video\/tos|\/dash\/|\/hls\/)[^\s"'<>]*|magnet:\?[^\s"'<>]+|ed2k:\/\/[^\s"'<>]+)/gi)) {
       add(match[0]);
     }
   }

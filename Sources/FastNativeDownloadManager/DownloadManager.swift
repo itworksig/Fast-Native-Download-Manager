@@ -177,6 +177,7 @@ enum Category: String, CaseIterable, Identifiable {
 enum DownloadEngineChoice: String, CaseIterable, Identifiable, Sendable {
     case automatic = "Auto"
     case native = "Native"
+    case amazon = "Amazon S3"
     case ytdlp = "yt-dlp"
     case ffmpeg = "ffmpeg"
     case bittorrent = "BitTorrent"
@@ -265,6 +266,7 @@ private enum RuntimePluginSecurityPolicy {
             "FNDM_OUTPUT": item.destinationURL.path,
             "FNDM_OUTPUT_DIR": item.destinationURL.deletingLastPathComponent().path,
             "FNDM_FILE": item.fileName,
+            "FNDM_CONNECTIONS": String(max(1, item.preferredConnectionCount)),
             "FNDM_COOKIE": allowCookies ? (item.cookie ?? "") : "",
             "FNDM_HEADERS": Self.loggableHeaders(item.headers),
             "FNDM_FORMAT": item.ytdlpFormatCode,
@@ -497,7 +499,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             requestHeaders["User-Agent"] = "FastNativeDownloadManager/0.2"
         }
         do {
-            let metadata = try await probe(sourceURL: sourceURL, headers: requestHeaders, cookie: cookie)
+            let metadata = try await previewProbe(sourceURL: sourceURL, headers: requestHeaders, cookie: cookie)
             let contentDisposition = metadata.responseHeaders["Content-Disposition"] ?? metadata.responseHeaders["content-disposition"] ?? ""
             let responseFileName = Self.fileName(fromContentDisposition: contentDisposition)
             let rawFileName = Self.sanitizedFileName(responseFileName?.nilIfEmpty ?? fallbackFileName)
@@ -795,20 +797,35 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
                 return
             }
 
-            let metadata = try await probe(sourceURL: effectiveSourceURL, headers: item.headers, cookie: item.cookie, item: item)
+            if let expiredMessage = Self.expiredSignedURLMessage(for: effectiveSourceURL) {
+                throw DownloadEngineError.http(expiredMessage)
+            }
+
+            let avoidRangeRequests = engine == .amazon || Self.shouldAvoidRangeRequests(for: effectiveSourceURL)
+            let metadata = avoidRangeRequests
+                ? DownloadMetadata(contentLength: 0, acceptsRanges: false, responseHeaders: [:])
+                : try await probe(sourceURL: effectiveSourceURL, headers: item.headers, cookie: item.cookie, item: item)
             appendLog(item, "HTTP probe: size \(metadata.contentLength), ranges \(metadata.acceptsRanges ? "yes" : "no").")
-            let resumeSupported = metadata.acceptsRanges && metadata.contentLength > 0
+            if avoidRangeRequests {
+                appendLog(item, "Amazon/Signed URL mode: skipping HEAD probe and using one plain GET connection.")
+            }
+            let resumeSupported = metadata.acceptsRanges && metadata.contentLength > 0 && !avoidRangeRequests
+            if !resumeSupported {
+                try? FileManager.default.removeItem(at: item.tempURL)
+            }
             let existingSegments = item.segments.filter { $0.length > 0 }
             let segments = resumeSupported
                 ? (existingSegments.isEmpty ? Self.makeSegments(totalBytes: metadata.contentLength, preferredCount: item.preferredConnectionCount) : existingSegments)
-                : [DownloadSegment(id: 0, start: 0, end: max(0, metadata.contentLength - 1), downloaded: Self.fileSize(at: item.tempURL), speed: 0, status: .queued)]
+                : [DownloadSegment(id: 0, start: 0, end: metadata.contentLength > 0 ? metadata.contentLength - 1 : Int64.max - 1, downloaded: 0, speed: 0, status: .queued)]
 
             let fd = open(item.tempURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
             guard fd >= 0 else {
                 throw POSIXError(.EIO)
             }
 
-            try Self.preallocate(fileDescriptor: fd, size: metadata.contentLength)
+            if metadata.contentLength > 0 {
+                try Self.preallocate(fileDescriptor: fd, size: metadata.contentLength)
+            }
 
             DispatchQueue.main.async {
                 item.totalBytes = metadata.contentLength > 0 ? metadata.contentLength : nil
@@ -819,7 +836,9 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
                 item.downloadedBytes = segments.map(\.downloaded).reduce(0, +)
                 item.progress = metadata.contentLength > 0 ? min(1, Double(item.downloadedBytes) / Double(metadata.contentLength)) : 0
                 item.status = .downloading
-                item.detail = resumeSupported ? "Receiving data with \(segments.count) HTTP Range connections..." : "Server does not support Range; downloading with one connection."
+                item.detail = resumeSupported
+                    ? "Receiving data with \(segments.count) HTTP Range connections..."
+                    : (avoidRangeRequests ? "Amazon/Signed URL mode; downloading with one plain connection." : "Server does not support Range; downloading with one connection.")
                 item.updatedAt = Date()
                 self.store.upsert(item)
                 self.store.saveSegments(item)
@@ -907,7 +926,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         }
 
         var headerLines = item.headers
-            .filter { $0.key != Self.engineHeaderKey }
+            .filter { !Self.isInternalHeader($0.key) }
             .map { "\($0.key): \($0.value)" }
         if let cookie = item.cookie, !cookie.isEmpty {
             headerLines.append("Cookie: \(cookie)")
@@ -1220,6 +1239,10 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             return patternMatches
         }
 
+        if manifest.kind?.lowercased() == "engine", scheme == "http" || scheme == "https" {
+            return !ext.isEmpty && manifest.fileExtensions?.map({ $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) }).contains(ext) == true
+        }
+
         if scheme != "http", scheme != "https",
            manifest.protocols?.map({ $0.lowercased() }).contains(scheme) == true {
             return true
@@ -1495,7 +1518,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         request.httpMethod = "HEAD"
         request.timeoutInterval = requestTimeout
         headers
-            .filter { $0.key != Self.engineHeaderKey }
+            .filter { !Self.isInternalHeader($0.key) }
             .forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         if let cookie {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -1508,6 +1531,41 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             throw error
         } catch {
             throw DownloadEngineError.network(Self.networkFailureMessage(error, context: "Metadata probe"))
+        }
+    }
+
+    private func previewProbe(sourceURL: URL, headers: [String: String], cookie: String?) async throws -> DownloadMetadata {
+        guard Self.shouldUseAmazonS3Mode(for: sourceURL) else {
+            return try await probe(sourceURL: sourceURL, headers: headers, cookie: cookie)
+        }
+        if let expirationMessage = Self.expiredSignedURLMessage(for: sourceURL) {
+            throw DownloadEngineError.http(expirationMessage)
+        }
+        if let metadata = try? await rangePreviewProbe(sourceURL: sourceURL, headers: headers, cookie: cookie) {
+            return metadata
+        }
+        return DownloadMetadata(contentLength: 0, acceptsRanges: false, responseHeaders: [:])
+    }
+
+    private func rangePreviewProbe(sourceURL: URL, headers: [String: String], cookie: String?) async throws -> DownloadMetadata {
+        var request = URLRequest(url: sourceURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = requestTimeout
+        request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        headers
+            .filter { !Self.isInternalHeader($0.key) }
+            .forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        if let cookie {
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
+
+        do {
+            let response = try await Self.headerOnlyResponse(for: request)
+            return try Self.parseMetadataResponse(response, sourceURL: sourceURL)
+        } catch let error as DownloadEngineError {
+            throw error
+        } catch {
+            throw DownloadEngineError.network(Self.networkFailureMessage(error, context: "Range metadata probe"))
         }
     }
 
@@ -1630,7 +1688,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         var request = URLRequest(url: url)
         request.timeoutInterval = TimeInterval(max(1, item.requestTimeoutSeconds))
         item.headers
-            .filter { $0.key != Self.engineHeaderKey }
+            .filter { !Self.isInternalHeader($0.key) }
             .forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         if let cookie = item.cookie {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -1681,12 +1739,32 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             throw DownloadEngineError.http(Self.httpFailureMessage(statusCode: httpResponse.statusCode, url: sourceURL))
         }
 
-        let contentLength = Int64(httpResponse.value(forHTTPHeaderField: "Content-Length") ?? "") ?? max(0, response.expectedContentLength)
+        let contentLength = Self.contentLength(from: httpResponse, fallback: response.expectedContentLength)
         let acceptsRanges = (httpResponse.value(forHTTPHeaderField: "Accept-Ranges") ?? "").lowercased().contains("bytes")
         let responseHeaders = httpResponse.allHeaderFields.reduce(into: [String: String]()) { result, pair in
             result[String(describing: pair.key)] = String(describing: pair.value)
         }
         return DownloadMetadata(contentLength: contentLength, acceptsRanges: acceptsRanges, responseHeaders: responseHeaders)
+    }
+
+    private static func contentLength(from response: HTTPURLResponse, fallback: Int64) -> Int64 {
+        if let contentRange = response.value(forHTTPHeaderField: "Content-Range"),
+           let totalText = contentRange.split(separator: "/").last,
+           totalText != "*",
+           let total = Int64(totalText) {
+            return total
+        }
+        return Int64(response.value(forHTTPHeaderField: "Content-Length") ?? "") ?? max(0, fallback)
+    }
+
+    private static func headerOnlyResponse(for request: URLRequest) async throws -> URLResponse {
+        let delegate = HeaderOnlyProbeDelegate()
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        return try await withCheckedThrowingContinuation { continuation in
+            delegate.setContinuation(continuation)
+            session.dataTask(with: request).resume()
+        }
     }
 
     private func startSegment(_ segment: DownloadSegment, item: DownloadItem, sourceURL: URL, fileDescriptor: Int32, resumeSupported: Bool) {
@@ -1696,7 +1774,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         request.httpMethod = "GET"
         request.timeoutInterval = TimeInterval(max(1, item.requestTimeoutSeconds))
         item.headers
-            .filter { $0.key != Self.engineHeaderKey }
+            .filter { !Self.isInternalHeader($0.key) }
             .forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         if let cookie = item.cookie {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -1812,6 +1890,55 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             item.eta = "--"
             item.connections = 0
             item.detail = "Merged and saved to \(item.destinationURL.path)"
+            item.updatedAt = Date()
+            queuedItemIDs.remove(item.id)
+            retryAttemptsBySegment = retryAttemptsBySegment.filter { $0.key.itemID != item.id }
+            appendLog(item, "Complete. Saved to \(item.destinationURL.path)")
+            store.upsert(item)
+            store.saveSegments(item)
+            objectWillChange.send()
+            runCompletionActions(for: item)
+            scheduleQueue()
+        } catch {
+            fail(item, message: error.localizedDescription)
+        }
+    }
+
+    private func finishSingleConnectionDownload(for item: DownloadItem) {
+        lock.lock()
+        let tasks = activeTasksByItemID[item.id] ?? []
+        let fd = fileHandlesByItemID[item.id]
+        activeTasksByItemID[item.id] = nil
+        fileHandlesByItemID[item.id] = nil
+        metadataByItemID[item.id] = nil
+        lock.unlock()
+
+        guard tasks.isEmpty else { return }
+        if let fd {
+            fsync(fd)
+            close(fd)
+        }
+
+        do {
+            let actualPartialSize = Self.fileSize(at: item.tempURL)
+            if let expected = item.totalBytes, expected > 0, actualPartialSize != expected {
+                throw DownloadEngineError.sizeMismatch(expected: expected, actual: actualPartialSize, path: item.tempURL.path)
+            }
+            if FileManager.default.fileExists(atPath: item.destinationURL.path) {
+                try FileManager.default.removeItem(at: item.destinationURL)
+            }
+            try FileManager.default.moveItem(at: item.tempURL, to: item.destinationURL)
+            let finalSize = Self.fileSize(at: item.destinationURL)
+
+            item.status = .complete
+            item.progress = 1
+            item.downloadedBytes = finalSize
+            item.totalBytes = finalSize
+            item.size = Self.byteCount(finalSize)
+            item.speed = "--"
+            item.eta = "--"
+            item.connections = 0
+            item.detail = "Saved to \(item.destinationURL.path)"
             item.updatedAt = Date()
             queuedItemIDs.remove(item.id)
             retryAttemptsBySegment = retryAttemptsBySegment.filter { $0.key.itemID != item.id }
@@ -2088,6 +2215,31 @@ extension DownloadManager: URLSessionDataDelegate {
             return .cancel
         }
 
+        if !transfer.resumeSupported {
+            let contentLength = Int64(httpResponse.value(forHTTPHeaderField: "Content-Length") ?? "") ?? max(0, response.expectedContentLength)
+            if contentLength > 0 {
+                DispatchQueue.main.async {
+                    let item = transfer.item
+                    item.totalBytes = contentLength
+                    item.size = Self.byteCount(contentLength)
+                    if let index = item.segments.firstIndex(where: { $0.id == transfer.segmentID }) {
+                        let current = item.segments[index]
+                        item.segments[index] = DownloadSegment(
+                            id: current.id,
+                            start: current.start,
+                            end: contentLength - 1,
+                            downloaded: min(current.downloaded, contentLength),
+                            speed: current.speed,
+                            status: current.status
+                        )
+                    }
+                    self.store.upsert(item)
+                    self.store.saveSegments(item)
+                    self.objectWillChange.send()
+                }
+            }
+        }
+
         return .allow
     }
 
@@ -2132,6 +2284,8 @@ extension DownloadManager: URLSessionDataDelegate {
 
     private func runPluginCompletionActions(for item: DownloadItem) {
         let pluginFolder = Self.pluginDirectory()
+        let disabledIDs = Set(UserDefaults.standard.stringArray(forKey: "Plugins.disabledIDs") ?? [])
+        let trustedIDs = Set(UserDefaults.standard.stringArray(forKey: "Plugins.trustedIDs") ?? [])
         let folders = (try? FileManager.default.contentsOfDirectory(at: pluginFolder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
         for folder in folders {
             let manifestURL = folder.appendingPathComponent("plugin.json")
@@ -2139,7 +2293,15 @@ extension DownloadManager: URLSessionDataDelegate {
                   let manifest = try? JSONDecoder().decode(RuntimePluginManifest.self, from: data),
                   let action = manifest.completionAction?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !action.isEmpty,
-                  !["reveal", "notify"].contains(action.lowercased()) else {
+                  !["reveal", "notify"].contains(action.lowercased()),
+                  !disabledIDs.contains(manifest.id),
+                  trustedIDs.contains(manifest.id) || manifest.id.hasPrefix("builtin.") else {
+                continue
+            }
+
+            let permissions = Set(manifest.permissions ?? [])
+            let isCompletionPlugin = manifest.kind?.lowercased() == "completion" || permissions.contains("completion-action")
+            guard isCompletionPlugin else {
                 continue
             }
 
@@ -2147,12 +2309,19 @@ extension DownloadManager: URLSessionDataDelegate {
             process.currentDirectoryURL = folder
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-lc", action]
-            process.environment = [
+            let sourceURL = item.sourceURL ?? URL(string: item.url) ?? item.destinationURL
+            process.environment = RuntimePluginSecurityPolicy.sanitizedEnvironment(
+                for: item,
+                sourceURL: sourceURL,
+                allowCookies: permissions.contains("cookies") || manifest.id.hasPrefix("builtin.")
+            ).merging([
                 "FNDM_FILE": item.destinationURL.path,
+                "FNDM_OUTPUT": item.destinationURL.path,
+                "FNDM_OUTPUT_DIR": item.destinationURL.deletingLastPathComponent().path,
                 "FNDM_URL": item.url,
                 "FNDM_NAME": item.fileName,
                 "FNDM_CATEGORY": item.category.rawValue
-            ]
+            ], uniquingKeysWith: { _, new in new })
             do {
                 appendLog(item, "Plugin \(manifest.name) completion action: \(action)")
                 try process.run()
@@ -2188,6 +2357,11 @@ extension DownloadManager: URLSessionDataDelegate {
             self.lock.lock()
             self.retryAttemptsBySegment[SegmentRetryKey(itemID: item.id, segmentID: snapshot.segmentID)] = nil
             self.lock.unlock()
+
+            if !transfer.resumeSupported {
+                self.finishSingleConnectionDownload(for: item)
+                return
+            }
 
             if let index = item.segments.firstIndex(where: { $0.id == snapshot.segmentID }) {
                 item.segments[index].downloaded = item.segments[index].length
@@ -2345,6 +2519,42 @@ private struct DownloadMetadata: Sendable {
     let responseHeaders: [String: String]
 }
 
+private final class HeaderOnlyProbeDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<URLResponse, Error>?
+
+    func setContinuation(_ continuation: CheckedContinuation<URLResponse, Error>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse) async -> URLSession.ResponseDisposition {
+        finish(with: .success(response))
+        return .cancel
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            finish(with: .failure(error))
+        }
+    }
+
+    private func finish(with result: Result<URLResponse, Error>) {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        guard let continuation else { return }
+        switch result {
+        case .success(let response):
+            continuation.resume(returning: response)
+        case .failure(let error):
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
 private enum DownloadEngineError: LocalizedError {
     case invalidResponse
     case http(String)
@@ -2485,13 +2695,23 @@ extension DownloadManager {
 
     static func shouldUseYTDLPHost(_ url: URL) -> Bool {
         let host = url.host()?.lowercased() ?? ""
+        if host == "imdb.com" || host.hasSuffix(".imdb.com") {
+            return isIMDbVideoURL(url)
+        }
         let mediaHosts = [
             "youtube.com", "youtu.be", "bilibili.com", "vimeo.com",
-            "imdb.com", "x.com", "twitter.com", "instagram.com", "tiktok.com",
+            "x.com", "twitter.com", "instagram.com", "tiktok.com",
             "facebook.com", "fb.watch", "twitch.tv", "dailymotion.com", "dai.ly",
             "reddit.com", "redd.it", "soundcloud.com", "pinterest.com", "linkedin.com"
         ]
         return mediaHosts.contains { host == $0 || host.hasSuffix(".\($0)") }
+    }
+
+    static func isIMDbVideoURL(_ url: URL) -> Bool {
+        let host = url.host()?.lowercased() ?? ""
+        guard host == "imdb.com" || host.hasSuffix(".imdb.com") else { return false }
+        let path = url.path.lowercased()
+        return path.hasPrefix("/video/") || path.hasPrefix("/videoplayer/")
     }
 
     static func parseYTDLPProgress(_ line: String) -> ExternalToolProgress? {
@@ -2550,6 +2770,9 @@ extension DownloadManager {
 
     static func sitePreset(for url: URL) -> SiteDownloadPreset? {
         let host = url.host?.lowercased() ?? ""
+        if shouldUseAmazonS3Mode(for: url) {
+            return SiteDownloadPreset(name: "Amazon S3", engine: .amazon, ytdlpFormat: "")
+        }
         if host.contains("youtube.com") || host.contains("youtu.be") {
             return SiteDownloadPreset(name: "YouTube", engine: .ytdlp, ytdlpFormat: "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b")
         }
@@ -2558,6 +2781,9 @@ extension DownloadManager {
         }
         if host.contains("tiktok.com") || host.contains("tiktokv.com") || host.contains("tiktokcdn.com") {
             return SiteDownloadPreset(name: "TikTok", engine: .ytdlp, ytdlpFormat: "bv*+ba/b")
+        }
+        if isIMDbVideoURL(url) {
+            return SiteDownloadPreset(name: "IMDb", engine: .ytdlp, ytdlpFormat: "bv*+ba/b")
         }
         if host.contains("instagram.com") || host.contains("cdninstagram.com") {
             return SiteDownloadPreset(name: "Instagram", engine: .ytdlp, ytdlpFormat: "bv*+ba/b")
@@ -2922,11 +3148,17 @@ extension DownloadManager {
     }
 
     static func httpFailureMessage(statusCode: Int, url: URL?) -> String {
-        if statusCode == 618, let url, signedURLExpiration(in: url) != nil {
-            return "HTTP 618: this signed GitHub asset URL has expired. Open the release page and copy a fresh download link."
+        if statusCode == 618, let url, let expiration = signedURLExpiration(in: url) {
+            if expiration <= Date() {
+                return "HTTP 618: this signed GitHub asset URL expired at \(signedURLExpirationText(expiration)). Open the release page and copy a fresh download link."
+            }
+            return "HTTP 618: this signed GitHub asset URL was rejected before its expiry at \(signedURLExpirationText(expiration)). Open the release page and copy a fresh download link."
         }
-        if [401, 403].contains(statusCode), let url, signedURLExpiration(in: url) != nil {
-            return "HTTP \(statusCode): this signed download URL may be expired or unauthorized. Copy a fresh link from the source page."
+        if [401, 403].contains(statusCode), let url, let expiration = signedURLExpiration(in: url) {
+            if expiration <= Date() {
+                return "HTTP \(statusCode): this signed download URL expired at \(signedURLExpirationText(expiration)). Copy a fresh link from the source page."
+            }
+            return "HTTP \(statusCode): the server rejected this signed download URL before its expiry at \(signedURLExpirationText(expiration)). Copy a fresh link from the source page."
         }
         return "HTTP \(statusCode)"
     }
@@ -2978,13 +3210,89 @@ extension DownloadManager {
         return "\(context) failed: \(error.localizedDescription)"
     }
 
+    static func expiredSignedURLMessage(for url: URL, now: Date = Date()) -> String? {
+        guard let expiration = signedURLExpiration(in: url), expiration <= now else {
+            return nil
+        }
+        return "Signed download URL expired at \(signedURLExpirationText(expiration)). Copy a fresh link from the source page."
+    }
+
+    static func shouldAvoidRangeRequests(for url: URL) -> Bool {
+        shouldUseAmazonS3Mode(for: url) || isAzureSignedURL(url)
+    }
+
+    static func isInternalHeader(_ name: String) -> Bool {
+        name.lowercased().hasPrefix("x-fndm-")
+    }
+
+    static func shouldUseAmazonS3Mode(for url: URL) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        if host == "s3.amazonaws.com" || host.hasSuffix(".s3.amazonaws.com") || host.contains(".s3.") {
+            return true
+        }
+        if host.hasSuffix(".r2.cloudflarestorage.com") || host.hasSuffix(".r2.dev") {
+            return true
+        }
+        guard let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return false }
+        let names = Set(queryItems.map { $0.name.lowercased() })
+        if names.contains("awsaccesskeyid") && names.contains("signature") {
+            return true
+        }
+        if names.contains("x-amz-signature") || names.contains("x-amz-credential") || names.contains("x-amz-security-token") {
+            return true
+        }
+        return false
+    }
+
+    static func isAzureSignedURL(_ url: URL) -> Bool {
+        guard let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
+            return false
+        }
+        let names = Set(queryItems.map { $0.name.lowercased() })
+        if names.contains("se") && (names.contains("sig") || names.contains("sp") || names.contains("sv")) {
+            return true
+        }
+        return false
+    }
+
     static func signedURLExpiration(in url: URL) -> Date? {
-        guard let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "se" })?.value else {
+        guard let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
+            return nil
+        }
+        func queryValue(_ name: String) -> String? {
+            queryItems.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value
+        }
+
+        if let value = queryValue("Expires"), let seconds = TimeInterval(value) {
+            return Date(timeIntervalSince1970: seconds)
+        }
+
+        if let dateValue = queryValue("X-Amz-Date"),
+           let validSecondsValue = queryValue("X-Amz-Expires"),
+           let validSeconds = TimeInterval(validSecondsValue) {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+            if let start = formatter.date(from: dateValue) {
+                return start.addingTimeInterval(validSeconds)
+            }
+        }
+
+        guard let value = queryValue("se") else {
             return nil
         }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: value)
+    }
+
+    static func signedURLExpirationText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss 'UTC'"
+        return formatter.string(from: date)
     }
 }
 
