@@ -1954,18 +1954,67 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func fail(_ item: DownloadItem, message: String) {
+        let friendlyMessage = Self.friendlyFailureMessage(message)
         queuedItemIDs.remove(item.id)
         cancelTasks(for: item, closingAs: .failed, removePartial: false)
         item.speed = "--"
         item.eta = "--"
-        item.detail = "Failed: \(message)"
-        appendLog(item, "Failed: \(message)")
+        item.detail = "Failed: \(friendlyMessage)"
+        appendLog(item, "Failed: \(friendlyMessage)")
         item.updatedAt = Date()
         store.upsert(item)
         store.saveSegments(item)
-        notify(title: "Download Failed", body: "\(item.fileName): \(message)", identifier: "\(item.id.uuidString)-failed")
+        notify(title: "Download Failed", body: "\(item.fileName): \(friendlyMessage)", identifier: "\(item.id.uuidString)-failed")
         objectWillChange.send()
         scheduleQueue()
+    }
+
+    static func friendlyFailureMessage(_ message: String) -> String {
+        let lowered = message.lowercased()
+
+        if lowered.contains("yt-dlp is not installed") {
+            return "yt-dlp is missing. Install yt-dlp, then retry this task."
+        }
+        if lowered.contains("ffmpeg is not installed") {
+            return "ffmpeg is missing. Install ffmpeg, then retry this media task."
+        }
+        if lowered.contains("aria2c is not installed") {
+            return "aria2c is missing. Install aria2, then retry this task."
+        }
+        if lowered.contains("amule") || lowered.contains("ed2k plugin needs") {
+            return "The eD2K helper is missing. Install aMule or an ed2k command-line helper, then retry."
+        }
+        if lowered.contains("yt-dlp") && lowered.contains("exited with code") {
+            return "yt-dlp could not download this link. The site may require cookies/login, a fresh URL, or another format."
+        }
+        if lowered.contains("ffmpeg") && lowered.contains("exited with code") {
+            return "ffmpeg could not process this media stream. Try another HLS/DASH variant or refresh the page."
+        }
+        if lowered.contains("plugin") && lowered.contains("exited with code") {
+            return "The plugin failed while running. Check its dependencies, settings, and logs."
+        }
+        if lowered.contains("timed out") {
+            return "The server or external tool timed out. Check the network, then retry."
+        }
+        if lowered.contains("http 403") {
+            return "Access denied (HTTP 403). The link may be expired, signed for another session, or require cookies. Copy a fresh link from the source page."
+        }
+        if lowered.contains("http 401") {
+            return "Authentication required (HTTP 401). Add cookies or log in from the browser, then retry."
+        }
+        if lowered.contains("http 404") {
+            return "File not found (HTTP 404). The link may be removed or no longer valid."
+        }
+        if lowered.contains("signed download url expired") || lowered.contains("signed download url was rejected") {
+            return "This signed download link is no longer usable. Copy a fresh link from the source page."
+        }
+        if lowered.contains("encrypted hls") || lowered.contains("contentprotection") || lowered.contains("drm") {
+            return "This media appears to be encrypted or DRM-protected, which is not supported."
+        }
+        if lowered.contains("no output file was created") {
+            return "The external tool finished but did not create a file. Check the selected format and plugin logs."
+        }
+        return message
     }
 
     private func retryOrFail(_ transfer: SegmentTransfer, message: String, retryable: Bool) {

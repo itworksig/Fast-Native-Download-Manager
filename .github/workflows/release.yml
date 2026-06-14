@@ -1,0 +1,191 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - Package.swift
+      - Sources/**
+      - Packaging/**
+      - Browser Extension/**
+      - build.sh
+      - script/**
+      - .github/workflows/release.yml
+      - .github/release.yml
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Recreate release even if the tag already exists
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build macOS app and browser extensions
+    runs-on: macos-26
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(plutil -extract CFBundleShortVersionString raw Packaging/FastNativeDownloadManager-Info.plist)"
+          build="$(plutil -extract CFBundleVersion raw Packaging/FastNativeDownloadManager-Info.plist)"
+          if [[ -z "$version" ]]; then
+            echo "CFBundleShortVersionString is empty" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether release is needed
+        id: release_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          force="${{ github.event.inputs.force || 'false' }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null && [[ "$force" != "true" ]]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Release $tag already exists. Bump the app version or run manually with force=true."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select Xcode
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+          swift --version
+
+      - name: Build app bundle
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x build.sh script/build_and_run.sh
+          ./build.sh
+
+      - name: Package browser extensions
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./build.sh --extension
+
+      - name: Package app archive
+        if: steps.release_check.outputs.should_release == 'true'
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          app_zip="dist/Fast-Native-Download-Manager-$version-macos.zip"
+          ditto -c -k --sequesterRsrc --keepParent "dist/Fast Native Download Manager.app" "$app_zip"
+          echo "app_zip=$app_zip" >> "$GITHUB_OUTPUT"
+          {
+            shasum -a 256 "$app_zip"
+            shasum -a 256 "dist/fast-native-download-manager-chrome-$version.zip"
+            shasum -a 256 "dist/fast-native-download-manager-firefox-$version.zip"
+          } | tee "dist/Fast-Native-Download-Manager-$version.sha256"
+          echo "checksums=dist/Fast-Native-Download-Manager-$version.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifacts
+        if: steps.release_check.outputs.should_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fast-Native-Download-Manager-${{ steps.version.outputs.version }}
+          path: |
+            ${{ steps.package.outputs.app_zip }}
+            dist/fast-native-download-manager-chrome-${{ steps.version.outputs.version }}.zip
+            dist/fast-native-download-manager-firefox-${{ steps.version.outputs.version }}.zip
+            ${{ steps.package.outputs.checksums }}
+
+      - name: Generate release notes
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$tag" \
+            -f target_commitish="$GITHUB_SHA" \
+            --jq .body > release_notes.md; then
+            :
+          else
+            previous_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+            {
+              echo "## Changes"
+              echo
+              if [[ -n "$previous_tag" ]]; then
+                git log --pretty=format:'- %s (%h)' "$previous_tag..HEAD"
+              else
+                git log --pretty=format:'- %s (%h)'
+              fi
+            } > release_notes.md
+          fi
+          {
+            echo
+            echo "## Artifacts"
+            echo
+            echo "- macOS app zip"
+            echo "- Chrome extension zip"
+            echo "- Firefox extension zip"
+            echo
+            echo "## SHA-256"
+            echo
+            echo '```text'
+            cat "${{ steps.package.outputs.checksums }}"
+            echo '```'
+          } >> release_notes.md
+
+      - name: Create tag
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release delete "$tag" --yes --cleanup-tag || true
+          fi
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            git tag -d "$tag"
+            git push origin ":refs/tags/$tag" || true
+          fi
+          git tag -a "$tag" -m "Fast Native Download Manager ${{ steps.version.outputs.version }}"
+          git push origin "$tag"
+
+      - name: Publish GitHub release
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          gh release create "$tag" \
+            "${{ steps.package.outputs.app_zip }}" \
+            "dist/fast-native-download-manager-chrome-$version.zip" \
+            "dist/fast-native-download-manager-firefox-$version.zip" \
+            "${{ steps.package.outputs.checksums }}" \
+            --title "Fast Native Download Manager $version" \
+            --notes-file release_notes.md

@@ -102,6 +102,20 @@ private enum L {
             "Captured download": "捕获的下载",
             "Receiving data...": "正在接收数据...",
             "Saved to": "已保存到",
+            "yt-dlp is missing. Install yt-dlp, then retry this task.": "缺少 yt-dlp。安装 yt-dlp 后重试此任务。",
+            "ffmpeg is missing. Install ffmpeg, then retry this media task.": "缺少 ffmpeg。安装 ffmpeg 后重试此媒体任务。",
+            "aria2c is missing. Install aria2, then retry this task.": "缺少 aria2c。安装 aria2 后重试此任务。",
+            "The eD2K helper is missing. Install aMule or an ed2k command-line helper, then retry.": "缺少 eD2K 辅助工具。安装 aMule 或 ed2k 命令行工具后重试。",
+            "yt-dlp could not download this link. The site may require cookies/login, a fresh URL, or another format.": "yt-dlp 无法下载此链接。网站可能需要 Cookie/登录、新链接或其他格式。",
+            "ffmpeg could not process this media stream. Try another HLS/DASH variant or refresh the page.": "ffmpeg 无法处理此媒体流。请尝试其他 HLS/DASH 清晰度，或刷新页面后重试。",
+            "The plugin failed while running. Check its dependencies, settings, and logs.": "插件运行失败。请检查依赖、设置和日志。",
+            "The server or external tool timed out. Check the network, then retry.": "服务器或外部工具超时。请检查网络后重试。",
+            "Access denied (HTTP 403). The link may be expired, signed for another session, or require cookies. Copy a fresh link from the source page.": "访问被拒绝（HTTP 403）。链接可能已过期、属于其他会话，或需要 Cookie。请从源页面复制新链接。",
+            "Authentication required (HTTP 401). Add cookies or log in from the browser, then retry.": "需要认证（HTTP 401）。请添加 Cookie，或在浏览器登录后重试。",
+            "File not found (HTTP 404). The link may be removed or no longer valid.": "文件未找到（HTTP 404）。链接可能已被删除或失效。",
+            "This signed download link is no longer usable. Copy a fresh link from the source page.": "这个签名下载链接已不可用。请从源页面复制新链接。",
+            "This media appears to be encrypted or DRM-protected, which is not supported.": "此媒体似乎已加密或受 DRM 保护，当前不支持。",
+            "The external tool finished but did not create a file. Check the selected format and plugin logs.": "外部工具已结束，但没有生成文件。请检查所选格式和插件日志。",
             "Queue: On": "队列：开启",
             "Queue: Stopped": "队列：已停止",
             "active": "个活动",
@@ -301,6 +315,7 @@ private struct PluginManifest: Codable, Identifiable, Hashable {
     let homepage: String?
     let permissions: [String]?
     let allowedCommands: [String]?
+    let dependencyCommands: [String]?
     let protocols: [String]?
     let fileExtensions: [String]?
     let urlPatterns: [String]?
@@ -318,6 +333,15 @@ private struct InstalledPlugin: Identifiable, Hashable {
     var trusted: Bool
 
     var id: String { manifest.id }
+}
+
+private struct PluginDependencyStatus: Hashable {
+    let requiredCommands: [String]
+    let missingCommands: [String]
+
+    var isSatisfied: Bool {
+        missingCommands.isEmpty
+    }
 }
 
 private struct MarketplacePlugin: Identifiable, Hashable, Codable {
@@ -537,6 +561,7 @@ private enum DefaultPluginInstaller {
               "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
               "permissions": ["torrent", "magnet", "tracker-list", "external-engine"],
               "allowedCommands": ["aria2c"],
+              "dependencyCommands": ["aria2c"],
               "protocols": ["magnet"],
               "fileExtensions": ["torrent"],
               "urlPatterns": ["magnet:*", "http://*/*.torrent", "https://*/*.torrent"],
@@ -573,6 +598,7 @@ private enum DefaultPluginInstaller {
               "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
               "permissions": ["ed2k", "external-engine"],
               "allowedCommands": ["amulecmd"],
+              "dependencyCommands": ["amulecmd", "ed2k"],
               "protocols": ["ed2k"],
               "fileExtensions": ["ed2k"],
               "urlPatterns": ["ed2k://*"],
@@ -682,7 +708,7 @@ private enum DefaultPluginInstaller {
             folderName: "builtin-completion-auto-unzip",
             name: "Auto Unzip",
             description: "Extracts completed ZIP files into a sibling folder.",
-            allowedCommands: ["if"],
+            allowedCommands: ["mkdir", "ditto"],
             action: "if [[ \"${FNDM_OUTPUT##*.}\" == \"zip\" ]]; then target=\"${FNDM_OUTPUT%.*}\"; mkdir -p \"$target\"; /usr/bin/ditto -x -k \"$FNDM_OUTPUT\" \"$target\"; fi"
         )
         installCompletionPlugin(
@@ -690,7 +716,7 @@ private enum DefaultPluginInstaller {
             folderName: "builtin-completion-checksum",
             name: "Checksum File",
             description: "Writes SHA-256 and MD5 checksum sidecar files for completed downloads.",
-            allowedCommands: ["shasum"],
+            allowedCommands: ["shasum", "md5"],
             action: "/usr/bin/shasum -a 256 \"$FNDM_OUTPUT\" > \"$FNDM_OUTPUT.sha256\"; /sbin/md5 -r \"$FNDM_OUTPUT\" > \"$FNDM_OUTPUT.md5\""
         )
         installCompletionPlugin(
@@ -698,7 +724,7 @@ private enum DefaultPluginInstaller {
             folderName: "builtin-completion-auto-organize",
             name: "Auto Organize",
             description: "Moves completed files into category folders such as Video, Audio, Archives, Apps, and Documents.",
-            allowedCommands: ["case"],
+            allowedCommands: ["mkdir", "mv"],
             action: "ext=\"${FNDM_OUTPUT##*.}\"; ext=\"${ext:l}\"; case \"$ext\" in mp4|mkv|mov|webm|avi|m4v) bucket=Video ;; mp3|m4a|flac|wav|aac|ogg) bucket=Audio ;; zip|rar|7z|tar|gz|bz2|xz) bucket=Archives ;; dmg|pkg|app|ipa|apk) bucket=Apps ;; pdf|doc|docx|ppt|pptx|xls|xlsx|txt|md) bucket=Documents ;; *) bucket=Other ;; esac; target=\"$FNDM_OUTPUT_DIR/$bucket\"; mkdir -p \"$target\"; mv -n \"$FNDM_OUTPUT\" \"$target/\""
         )
         installCompletionPlugin(
@@ -706,7 +732,7 @@ private enum DefaultPluginInstaller {
             folderName: "builtin-completion-virustotal",
             name: "VirusTotal Lookup",
             description: "Creates a VirusTotal hash lookup link without uploading the file.",
-            allowedCommands: ["shasum"],
+            allowedCommands: ["shasum", "awk"],
             action: "hash=$(/usr/bin/shasum -a 256 \"$FNDM_OUTPUT\" | awk '{print $1}'); printf 'https://www.virustotal.com/gui/search/%s\\n' \"$hash\" > \"$FNDM_OUTPUT.virustotal.url\""
         )
         installScriptExtractorPlugin(
@@ -725,7 +751,8 @@ private enum DefaultPluginInstaller {
             description: "Detects HLS and DASH manifests and routes them to the ffmpeg media-format workflow.",
             urlPatterns: ["http://*", "https://*"],
             scriptName: "hls-dash.js",
-            script: hlsDashExtractorScript
+            script: hlsDashExtractorScript,
+            dependencyCommands: ["node", "ffmpeg"]
         )
     }
 
@@ -780,7 +807,8 @@ private enum DefaultPluginInstaller {
         description: String,
         urlPatterns: [String],
         scriptName: String,
-        script: String
+        script: String,
+        dependencyCommands: [String] = ["node"]
     ) {
         do {
             try FileManager.default.createDirectory(at: AppPreferences.pluginsDirectory, withIntermediateDirectories: true)
@@ -798,6 +826,7 @@ private enum DefaultPluginInstaller {
               "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
               "permissions": ["site-extractor", "network", "download-request", "external-engine"],
               "allowedCommands": ["node"],
+              "dependencyCommands": \(jsonArray(dependencyCommands)),
               "protocols": [],
               "fileExtensions": [],
               "urlPatterns": \(jsonArray(urlPatterns)),
@@ -840,6 +869,7 @@ private enum DefaultPluginInstaller {
               "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
               "permissions": ["external-engine", "filesystem-write", "shell"],
               "allowedCommands": \(jsonArray(allowedCommands)),
+              "dependencyCommands": \(jsonArray(allowedCommands)),
               "protocols": \(jsonArray(protocols)),
               "fileExtensions": \(jsonArray(fileExtensions)),
               "urlPatterns": \(jsonArray(urlPatterns)),
@@ -878,6 +908,7 @@ private enum DefaultPluginInstaller {
               "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
               "permissions": ["completion-action", "external-engine", "filesystem-write", "shell"],
               "allowedCommands": \(jsonArray(allowedCommands)),
+              "dependencyCommands": \(jsonArray(allowedCommands)),
               "protocols": [],
               "fileExtensions": [],
               "urlPatterns": [],
@@ -925,6 +956,7 @@ private enum DefaultPluginInstaller {
               "homepage": "https://github.com/itworksig/Fast-Native-Download-Manager",
               "permissions": ["site-extractor", "cookies", "external-engine", "filesystem-write"],
               "allowedCommands": ["yt-dlp"],
+              "dependencyCommands": ["yt-dlp"],
               "protocols": [],
               "fileExtensions": [],
               "urlPatterns": [\(escapedPatterns)],
@@ -1157,6 +1189,7 @@ private enum DefaultPluginInstaller {
 @MainActor
 private final class PluginManager: ObservableObject {
     @Published private(set) var plugins: [InstalledPlugin] = []
+    @Published private(set) var dependencyStatuses: [String: PluginDependencyStatus] = [:]
     @Published var statusMessage: String?
 
     private let fileManager = FileManager.default
@@ -1193,6 +1226,20 @@ private final class PluginManager: ObservableObject {
             )
         }
         .sorted { $0.manifest.name.localizedCaseInsensitiveCompare($1.manifest.name) == .orderedAscending }
+        refreshDependencyStatus(updateStatusMessage: false)
+    }
+
+    func refreshDependencyStatus(updateStatusMessage: Bool = true) {
+        dependencyStatuses = Dictionary(uniqueKeysWithValues: plugins.map { plugin in
+            let required = Self.requiredCommands(for: plugin.manifest)
+            let missing = required.filter { !Self.commandExists($0) }
+            return (plugin.id, PluginDependencyStatus(requiredCommands: required, missingCommands: missing))
+        })
+        guard updateStatusMessage else { return }
+        let missingCount = dependencyStatuses.values.reduce(0) { $0 + $1.missingCommands.count }
+        statusMessage = missingCount == 0
+            ? L.t("All plugin dependencies are available.", "所有插件依赖均可用。")
+            : L.t("\(missingCount) plugin dependency missing. See plugin rows for details.", "缺少 \(missingCount) 个插件依赖。请查看插件行详情。")
     }
 
     func installFromPicker() {
@@ -1524,6 +1571,33 @@ private final class PluginManager: ObservableObject {
         return manifest.engineCommand?.isEmpty == false
             || manifest.completionAction?.isEmpty == false
             || !permissions.isDisjoint(with: ["external-engine", "filesystem-write", "shell", "cookies"])
+    }
+
+    private static func requiredCommands(for manifest: PluginManifest) -> [String] {
+        let shellBuiltins: Set<String> = ["", "if", "then", "else", "fi", "case", "esac", "for", "while", "do", "done", "cd", "echo", "printf", "test", "[", "[["]
+        let commands = manifest.dependencyCommands ?? manifest.allowedCommands ?? []
+        let normalized = commands
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { $0.split(separator: "/").last.map(String.init) ?? $0 }
+            .filter { !shellBuiltins.contains($0) }
+        return Array(Set(normalized)).sorted()
+    }
+
+    private static func commandExists(_ command: String) -> Bool {
+        if command.contains("/") {
+            return FileManager.default.isExecutableFile(atPath: command)
+        }
+        let searchPaths = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ]
+        return searchPaths.contains { directory in
+            FileManager.default.isExecutableFile(atPath: URL(fileURLWithPath: directory).appendingPathComponent(command).path)
+        }
     }
 }
 
@@ -3324,6 +3398,9 @@ private struct OptionsPanel: View {
                 Toggle(L.t("Ask before trust", "信任前询问"), isOn: $confirmPluginTrust)
                     .toggleStyle(.checkbox)
                 Spacer()
+                Button(L.t("Check Dependencies", "检测依赖")) {
+                    pluginManager.refreshDependencyStatus()
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -3350,6 +3427,7 @@ private struct OptionsPanel: View {
                         ForEach(pluginManager.plugins) { plugin in
                             PluginRow(
                                 plugin: plugin,
+                                dependencyStatus: pluginManager.dependencyStatuses[plugin.id],
                                 onToggle: { pluginManager.setEnabled($0, for: plugin) },
                                 onTrust: { pluginManager.setTrusted($0, for: plugin) },
                                 onSettings: { pluginSettingsItem = plugin },
@@ -4120,6 +4198,7 @@ private struct PluginSettingsPanel: View {
 
 private struct PluginRow: View {
     let plugin: InstalledPlugin
+    let dependencyStatus: PluginDependencyStatus?
     let onToggle: (Bool) -> Void
     let onTrust: (Bool) -> Void
     let onSettings: () -> Void
@@ -4155,6 +4234,8 @@ private struct PluginRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+
+                dependencyView
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -4222,6 +4303,27 @@ private struct PluginRow: View {
             return L.t("Runs an external download engine for supported links.", "为支持的链接调用外部下载引擎。")
         default:
             return L.t("Extends download capture and processing.", "扩展下载捕获和处理能力。")
+        }
+    }
+
+    @ViewBuilder
+    private var dependencyView: some View {
+        if let dependencyStatus, !dependencyStatus.requiredCommands.isEmpty {
+            if dependencyStatus.isSatisfied {
+                Label(L.t("Dependencies OK", "依赖正常"), systemImage: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            } else {
+                Label("\(L.t("Missing", "缺失")): \(dependencyStatus.missingCommands.joined(separator: ", "))", systemImage: "xmark.octagon.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .help("\(L.t("Install missing commands and check again", "安装缺失命令后重新检测")): \(dependencyStatus.missingCommands.joined(separator: ", "))")
+            }
+        } else {
+            Label(L.t("No external dependencies", "无外部依赖"), systemImage: "checkmark.circle")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
