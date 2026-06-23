@@ -1,3 +1,5 @@
+const api = typeof browser !== "undefined" ? browser : chrome;
+const menuAPI = api.menus || api.contextMenus;
 const MENU_ID = "download-with-fast-native-download-manager";
 const BRIDGE_URL = "http://127.0.0.1:51237/download";
 const RESOURCES_URL = "http://127.0.0.1:51237/resources";
@@ -9,16 +11,15 @@ const headerHintsByUrl = new Map();
 const sentDownloadIds = new Set();
 const sentResourceUrls = new Set();
 const resourcesByTabId = new Map();
+const isChrome = typeof browser === "undefined";
 
-chrome.runtime.onInstalled.addListener(registerContextMenu);
-chrome.runtime.onStartup.addListener(registerContextMenu);
-
+api.runtime.onInstalled.addListener(registerContextMenu);
+api.runtime.onStartup?.addListener(registerContextMenu);
 registerContextMenu();
 
 function registerContextMenu() {
-  chrome.contextMenus.remove(MENU_ID, () => {
-    chrome.runtime.lastError;
-    chrome.contextMenus.create({
+  removeContextMenu(MENU_ID).finally(() => {
+    menuAPI.create({
       id: MENU_ID,
       title: "Download with Fast Native Download Manager",
       contexts: ["link", "image", "video", "audio", "page", "selection"]
@@ -26,7 +27,133 @@ function registerContextMenu() {
   });
 }
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+function removeContextMenu(id) {
+  if (!isChrome) {
+    return Promise.resolve(menuAPI.remove(id)).catch(() => {});
+  }
+  return new Promise((resolve) => {
+    chrome.contextMenus.remove(id, () => {
+      chrome.runtime.lastError;
+      resolve();
+    });
+  });
+}
+
+function cancelDownload(id) {
+  if (!isChrome) {
+    return Promise.resolve(api.downloads.cancel(id)).catch(() => {});
+  }
+  return new Promise((resolve) => {
+    chrome.downloads.cancel(id, () => {
+      chrome.runtime.lastError;
+      resolve();
+    });
+  });
+}
+
+function eraseDownload(id) {
+  if (!isChrome) {
+    return Promise.resolve(api.downloads.erase({ id })).catch(() => {});
+  }
+  return new Promise((resolve) => {
+    chrome.downloads.erase({ id }, () => {
+      chrome.runtime.lastError;
+      resolve();
+    });
+  });
+}
+
+function getTab(tabId) {
+  if (!isChrome) {
+    return api.tabs.get(tabId);
+  }
+  return new Promise((resolve, reject) => {
+    chrome.tabs.get(tabId, (tab) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve(tab);
+    });
+  });
+}
+
+function queryTabs(query) {
+  if (!isChrome) {
+    return api.tabs.query(query);
+  }
+  return new Promise((resolve, reject) => {
+    chrome.tabs.query(query, (tabs) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve(tabs);
+    });
+  });
+}
+
+function executeTabScript(tabId, func) {
+  if (!isChrome) {
+    return api.tabs.executeScript(tabId, {
+      code: `(${func.toString()})();`
+    });
+  }
+  return chrome.scripting.executeScript({
+    target: { tabId },
+    func
+  }).then((results) => results.map((result) => result.result));
+}
+
+function sendTabMessage(tabId, message) {
+  if (!isChrome) {
+    return api.tabs.sendMessage(tabId, message);
+  }
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+function setActionBadgeText(details) {
+  if (!isChrome) {
+    const actionAPI = api.action || api.browserAction;
+    return actionAPI.setBadgeText(details);
+  }
+  return chrome.action.setBadgeText(details);
+}
+
+function setActionBadgeBackgroundColor(details) {
+  if (!isChrome) {
+    const actionAPI = api.action || api.browserAction;
+    return actionAPI.setBadgeBackgroundColor(details);
+  }
+  return chrome.action.setBadgeBackgroundColor(details);
+}
+
+function getCookies(details) {
+  if (!isChrome) {
+    return api.cookies.getAll(details);
+  }
+  return chrome.cookies.getAll(details);
+}
+
+function createNotification(details) {
+  if (!isChrome) {
+    return api.notifications.create(details);
+  }
+  return chrome.notifications.create(details);
+}
+
+menuAPI.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== MENU_ID) {
     return;
   }
@@ -43,74 +170,75 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }));
 });
 
-chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab?.id) {
-    return;
-  }
-
-  try {
-    await requestAppExtractors(tab.url, tab.title);
-
-    const platformResource = await platformPageResource(tab);
-    if (platformResource) {
-      await sendResources([platformResource]);
-      return;
-    }
-
-    const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: scanPageForDownloadableResources
-    });
-    const urls = Array.isArray(result?.result) ? result.result : [];
-    const resources = await Promise.all(urls.filter(isDownloadableUrl).map((url) => buildResource(url, {
-      referer: tab.url,
-      source: "page-scan",
-      tabId: tab.id
-    })));
-    await sendResources([platformResource, ...resources].filter(Boolean));
-  } catch (error) {
-    console.error("Grabber page scan failed:", error);
-    notify("Grabber scan failed", error.message || "Unable to scan this page.");
-  }
-});
-
-chrome.downloads.onCreated.addListener((downloadItem) => {
+api.downloads.onCreated.addListener((downloadItem) => {
   if (!isHttpUrl(downloadItem.url) || sentDownloadIds.has(downloadItem.id)) {
     return;
   }
 
   sentDownloadIds.add(downloadItem.id);
-  chrome.downloads.cancel(downloadItem.id, () => {
-    chrome.runtime.lastError;
-    chrome.downloads.erase({ id: downloadItem.id }, () => chrome.runtime.lastError);
+  cancelDownload(downloadItem.id).finally(() => {
+    eraseDownload(downloadItem.id).catch(() => {});
   });
 
   buildRequest(downloadItem.url, {
     referer: downloadItem.referrer,
     fileName: fileNameFromDownload(downloadItem)
-  }).then(sendToLocalApp);
+  }).then(sendToLocalApp).catch(() => {});
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "fndm-download-resource" && message.resource?.url) {
-    sendToLocalApp(resourceToDownloadRequest(message.resource)).then(() => {
-      sendResponse({ ok: true });
+api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const respond = handleRuntimeMessage(message, sender);
+  if (!isChrome) {
+    return respond;
+  }
+  if (respond === false) {
+    return false;
+  }
+  respond.then(sendResponse).catch((error) => {
+    sendResponse({ ok: false, error: error.message || "Request failed." });
+  });
+  return true;
+});
+
+async function handleRuntimeMessage(message, sender) {
+  if (message?.type === "fndm-scan-tab") {
+    return tabFromMessage(message).then(scanTabForResources).then((resources) => {
+      return { ok: true, resources };
     }).catch((error) => {
-      sendResponse({ ok: false, error: error.message || "Unable to send download request." });
+      console.error("Grabber page scan failed:", error);
+      return { ok: false, error: error.message || "Unable to scan this page.", resources: [] };
     });
-    return true;
+  }
+
+  if (message?.type === "fndm-download-resource" && message.resource?.url) {
+    return sendToLocalApp(resourceToDownloadRequest(message.resource)).then(() => {
+      return { ok: true };
+    }).catch((error) => {
+      return { ok: false, error: error.message || "Unable to send download request." };
+    });
   }
 
   if (message?.type === "fndm-get-resources") {
-    const tabId = sender.tab?.id;
-    sendResponse({ resources: tabId == null ? [] : resourcesByTabId.get(tabId) || [] });
-    return false;
+    const tabId = typeof message.tabId === "number" ? message.tabId : sender.tab?.id;
+    return Promise.resolve({ resources: tabId == null ? [] : resourcesByTabId.get(tabId) || [] });
   }
 
   return false;
+}
+
+api.tabs.onRemoved?.addListener((tabId) => {
+  resourcesByTabId.delete(tabId);
+  updateBrowserActionBadge(tabId);
 });
 
-chrome.webRequest.onHeadersReceived.addListener(
+api.tabs.onUpdated?.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    resourcesByTabId.delete(tabId);
+    updateBrowserActionBadge(tabId);
+  }
+});
+
+api.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (!isHttpUrl(details.url)) {
       return;
@@ -129,11 +257,7 @@ chrome.webRequest.onHeadersReceived.addListener(
       });
 
       if (details.tabId >= 0) {
-        chrome.tabs.get(details.tabId, (tab) => {
-          if (chrome.runtime.lastError) {
-            sendRawResourceFromDetails(details, contentType);
-            return;
-          }
+        getTab(details.tabId).then((tab) => {
           platformPageResource(tab).then((resource) => {
             if (resource) {
               sendResources([resource]);
@@ -141,7 +265,7 @@ chrome.webRequest.onHeadersReceived.addListener(
             }
             sendRawResourceFromDetails(details, contentType);
           });
-        });
+        }).catch(() => sendRawResourceFromDetails(details, contentType));
         return;
       }
 
@@ -154,11 +278,11 @@ chrome.webRequest.onHeadersReceived.addListener(
 
 function sendRawResourceFromDetails(details, contentType) {
   buildResource(details.url, {
-    referer: details.initiator || details.documentUrl,
+    referer: details.originUrl || details.initiator || details.documentUrl,
     contentType,
     source: "network",
     tabId: details.tabId
-  }).then((resource) => sendResources([resource]));
+  }).then((resource) => sendResources([resource])).catch(() => {});
 }
 
 async function buildResource(targetUrl, context = {}) {
@@ -171,7 +295,7 @@ async function buildResource(targetUrl, context = {}) {
 
   const hint = headerHintsByUrl.get(targetUrl) || {};
   const fileName = hint.fileName || fileNameFromUrl(targetUrl);
-  const url = new URL(targetUrl);
+  const parsedURL = safeURL(targetUrl);
   const type = resourceType(targetUrl, context.contentType || hint.contentType);
   const headers = {
     "User-Agent": navigator.userAgent
@@ -198,7 +322,7 @@ async function buildResource(targetUrl, context = {}) {
 
   return {
     url: targetUrl,
-    host: url.hostname,
+    host: parsedURL?.hostname || protocolLabel(targetUrl),
     type,
     title: fileName || `${type} resource`,
     quality: context.source || "detected",
@@ -222,10 +346,10 @@ async function platformPageResource(tab) {
   }
 
   const headers = {
-    "User-Agent": navigator.userAgent
+    "User-Agent": navigator.userAgent,
+    Referer: tab.url,
+    Origin: new URL(tab.url).origin
   };
-  headers.Referer = tab.url;
-  headers.Origin = new URL(tab.url).origin;
   headers[ENGINE_HEADER] = "yt-dlp";
   headers[SITE_PRESET_HEADER] = platform;
   headers[YTDLP_FORMAT_HEADER] = platformFormat(platform);
@@ -246,33 +370,72 @@ async function platformPageResource(tab) {
 }
 
 async function sendResources(resources) {
-  const freshResources = resources.filter((resource) => resource && !sentResourceUrls.has(resource.url));
-  if (freshResources.length === 0) {
+  const validResources = resources.filter(Boolean);
+  if (validResources.length === 0) {
     return;
   }
 
-  freshResources.forEach((resource) => sentResourceUrls.add(resource.url));
-  if (sentResourceUrls.size > 500) {
-    sentResourceUrls.clear();
-  }
+  const freshResources = validResources.filter((resource) => !sentResourceUrls.has(resource.url));
 
-  try {
-    const response = await fetch(RESOURCES_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-FNDM-Source": "chrome-extension"
-      },
-      body: JSON.stringify(freshResources)
-    });
-    if (!response.ok) {
-      throw new Error(`Local bridge returned HTTP ${response.status}`);
+  if (freshResources.length > 0) {
+    freshResources.forEach((resource) => sentResourceUrls.add(resource.url));
+    if (sentResourceUrls.size > 500) {
+      sentResourceUrls.clear();
     }
-  } catch (error) {
-    console.error("Fast Native Download Manager resource bridge error:", error);
+
+    try {
+      const response = await fetch(RESOURCES_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-FNDM-Source": "chrome-extension"
+        },
+        body: JSON.stringify(freshResources)
+      });
+      if (!response.ok) {
+        throw new Error(`Local bridge returned HTTP ${response.status}`);
+      }
+    } catch (error) {
+      console.error("Fast Native Download Manager resource bridge error:", error);
+    }
   }
 
-  publishResourcesToTabs(freshResources);
+  publishResourcesToTabs(validResources);
+}
+
+async function tabFromMessage(message) {
+  if (typeof message.tabId === "number") {
+    return getTab(message.tabId);
+  }
+  const tabs = await queryTabs({ active: true, currentWindow: true });
+  if (tabs[0]) {
+    return tabs[0];
+  }
+  throw new Error("No active tab found.");
+}
+
+async function scanTabForResources(tab) {
+  if (!tab?.id) {
+    return [];
+  }
+
+  await requestAppExtractors(tab.url, tab.title);
+
+  const platformResource = await platformPageResource(tab);
+  if (platformResource) {
+    await sendResources([platformResource]);
+    return resourcesByTabId.get(tab.id) || [stripInternalResourceFields(platformResource)];
+  }
+
+  const results = await executeTabScript(tab.id, scanPageForDownloadableResources);
+  const urls = Array.isArray(results?.[0]) ? results[0] : [];
+  const resources = await Promise.all(urls.filter(isDownloadableUrl).map((url) => buildResource(url, {
+    referer: tab.url,
+    source: "page-scan",
+    tabId: tab.id
+  })));
+  await sendResources(resources.filter(Boolean));
+  return resourcesByTabId.get(tab.id) || [];
 }
 
 async function requestAppExtractors(pageUrl, title = "") {
@@ -316,10 +479,20 @@ function publishResourcesToTabs(resources) {
     }
     const list = Array.from(merged.values()).slice(-50);
     resourcesByTabId.set(tabId, list);
-    chrome.tabs.sendMessage(tabId, { type: "fndm-resources-detected", resources: list }, () => {
-      chrome.runtime.lastError;
-    });
+    updateBrowserActionBadge(tabId, list.length);
+    sendTabMessage(tabId, { type: "fndm-resources-detected", resources: list }).catch(() => {});
   }
+}
+
+function updateBrowserActionBadge(tabId, count = 0) {
+  Promise.resolve(setActionBadgeText({
+    tabId,
+    text: count > 0 ? String(Math.min(count, 99)) : ""
+  })).catch(() => {});
+  Promise.resolve(setActionBadgeBackgroundColor({
+    tabId,
+    color: "#007aff"
+  })).catch(() => {});
 }
 
 function stripInternalResourceFields(resource) {
@@ -333,7 +506,7 @@ function resourceToDownloadRequest(resource) {
     fileName: resource.fileName || resource.title || fileNameFromUrl(resource.url),
     headers: resource.headers || { "User-Agent": navigator.userAgent },
     cookie: resource.cookie || "",
-    source: "grabber-overlay"
+    source: "chrome-popup"
   };
 }
 
@@ -390,7 +563,7 @@ async function sendToLocalApp(request) {
 
 async function cookieHeaderFor(targetUrl) {
   try {
-    const cookies = await chrome.cookies.getAll({ url: targetUrl });
+    const cookies = await getCookies({ url: targetUrl });
     return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
   } catch (error) {
     console.warn("Unable to read cookies for download URL:", error);
@@ -399,12 +572,12 @@ async function cookieHeaderFor(targetUrl) {
 }
 
 function notify(title, message) {
-  chrome.notifications.create({
+  createNotification({
     type: "basic",
-    iconUrl: "icon-128.png",
+    iconUrl: api.runtime.getURL("icon-128.png"),
     title,
     message: String(message || "").slice(0, 240)
-  });
+  }).catch(() => {});
 }
 
 function findDownloadUrl(info) {
@@ -488,6 +661,24 @@ function isED2KUrl(value) {
   } catch {
     return /^ed2k:\/\//i.test(String(value));
   }
+}
+
+function safeURL(value) {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function protocolLabel(value) {
+  if (isMagnetUrl(value)) {
+    return "magnet";
+  }
+  if (isED2KUrl(value)) {
+    return "ed2k";
+  }
+  return "";
 }
 
 function looksDownloadable(url, contentType = "") {

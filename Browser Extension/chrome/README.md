@@ -1,19 +1,26 @@
 # Fast Native Download Manager Chrome Extension
 
-This extension adds a context-menu item:
+Chrome Manifest V3 WebExtension build for Fast Native Download Manager.
 
-`Download with Fast Native Download Manager`
+It sends links and detected resources to the local app bridge:
 
-It sends the selected link, media source, selected URL text, or current page URL to the macOS app through:
+`http://127.0.0.1:51237`
 
-`fastndm://download?url=...`
+## Features
+
+- Right-click menu: `Download with Fast Native Download Manager`
+- Automatic handoff for normal Chrome download links
+- Toolbar popup grabber with resource count badge
+- Resource sniffing for media, archives, app packages, torrents, eD2K, HLS, and DASH
+- Site preset handoff for YouTube, Bilibili, Vimeo, X, Instagram, TikTok, Facebook, Twitch, Dailymotion, Reddit, SoundCloud, Pinterest, LinkedIn, and IMDb
+- Sends cookies, Referer, Origin, User-Agent, file name hints, and engine hints to the app
 
 ## Install for local testing
 
-1. Build and open the macOS app once so macOS registers the `fastndm://` URL scheme.
+1. Start Fast Native Download Manager.
 2. Open Chrome and go to `chrome://extensions`.
 3. Enable `Developer mode`.
 4. Click `Load unpacked`.
 5. Select this folder: `Browser Extension/chrome`.
 
-Chrome may show an external protocol confirmation the first time the menu opens the app.
+Chrome uses the local HTTP bridge, so no native messaging host install is required for this build.

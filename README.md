@@ -10,7 +10,7 @@ swift run FastNativeDownloadManager
 
 You can also open the folder in Xcode as a Swift Package.
 
-For the packaged `.app`, use `Packaging/FastNativeDownloadManager-Info.plist` so macOS registers the `fastndm://` URL scheme used by the browser native helper.
+For the packaged `.app`, use `Packaging/FastNativeDownloadManager-Info.plist` so macOS registers the `fastndm://` URL scheme used by legacy browser handoff paths.
 
 ## Current UI Prototype
 
@@ -35,35 +35,29 @@ For the packaged `.app`, use `Packaging/FastNativeDownloadManager-Info.plist` so
 - Persists URL, status, progress, segment thread state, headers, cookies, save path, and timestamps.
 - Monitors the clipboard for downloadable HTTP/HTTPS links and prompts with "Detected downloadable link".
 - Automatically categorizes downloads as Video, Audio, Archive, App, or Document based on file extension and disposition hints.
-- Accepts external browser downloads through `fastndm://download?url=...`.
+- Accepts external browser downloads through the local bridge at `127.0.0.1:51237`.
 
 ## Browser Extension
 
 The browser extension source lives in `Browser Extension`.
 
 - `Browser Extension/chrome`: Chrome Manifest V3 extension.
-- `Browser Extension/firefox`: placeholder for the Firefox WebExtension build.
+- `Browser Extension/firefox`: Firefox WebExtension build.
 
 Chrome local testing:
 
-1. Build and open the macOS app once so macOS registers `fastndm://`.
-2. Install the native messaging host:
-
-```bash
-zsh script/install_chrome_native_host.sh
-```
-
-3. Open `chrome://extensions`.
-4. Enable `Developer mode`.
-5. Click `Load unpacked`.
-6. Select `Browser Extension/chrome`.
+1. Start Fast Native Download Manager.
+2. Open `chrome://extensions`.
+3. Enable `Developer mode`.
+4. Click `Load unpacked`.
+5. Select `Browser Extension/chrome`.
 
 After loading, right-click a link, image, video, audio item, selected URL text, or page and choose `Download with Fast Native Download Manager`.
 
-The Chrome extension uses Native Messaging, so it does not open a visible `fastndm://` tab and does not show Chrome's external-protocol confirmation dialog.
+The Chrome and Firefox extensions use the same local HTTP bridge and toolbar popup grabber.
 
 ## Next Milestones
 
-- Add browser native messaging for richer Chrome/Firefox capture without external protocol prompts.
+- Keep the Chrome and Firefox browser capture paths in sync as new extractors are added.
 - Build a media sniffer pipeline for HLS/DASH manifests, direct video files, archive links, and installer packages.
 - Add checksum verification and retry policy per segment.

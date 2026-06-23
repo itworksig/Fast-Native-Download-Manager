@@ -3,14 +3,14 @@
   "name": "Fast Native Download Manager",
   "description": "Intercept downloads and send links to Fast Native Download Manager from Chrome.",
   "version": "1.0.0",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1zayZoKdjKdSaDyp1DjlKMJ5epU7jezdVDYx+Otnf8ESSXufPL1p0rjyHsP/g3896HqjTBgBynWlIMQsWnHsQoItEQthdcNFw6zgCPF7j+Q3EdRLpc2UsCdnAOL3GISP5CajVatcSuWVTHl7EcJZGxlg3koKdql0OUwCzHigb8rivhTvPl3CdkEH1ah9DaQAvFF791+WUV+DaSpvwZxYy2boFRCc276GdO7W3tCKLhhConqr31z56qW0Vdw5u6hWcdkj1XeFXaFLFHyB0BKbaRfu5wzcGOVZ9BzDQKRHmvnKpxcFln6p52vx0RbWTVJHeNDtG6hTDPxo7g2M2VCu5wIDAQAB",
   "permissions": [
+    "activeTab",
     "contextMenus",
     "cookies",
     "downloads",
     "notifications",
-    "activeTab",
     "scripting",
+    "tabs",
     "webRequest"
   ],
   "host_permissions": [
@@ -36,6 +36,7 @@
   ],
   "action": {
     "default_title": "Fast Native Download Manager",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icon-16.png",
       "32": "icon-32.png",
