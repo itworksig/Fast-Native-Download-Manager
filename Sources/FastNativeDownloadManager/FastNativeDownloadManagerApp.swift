@@ -1737,6 +1737,10 @@ private enum PluginExtractorRunner {
         if let format = preset?.ytdlpFormat, !format.isEmpty {
             headers[DownloadManager.ytdlpFormatHeaderKey] = format
         }
+        if DownloadManager.isBilibiliURL(pageURL),
+           let playlistItems = DownloadManager.bilibiliPlaylistItems(from: pageURL) {
+            headers[DownloadManager.ytdlpPlaylistItemsHeaderKey] = playlistItems
+        }
         return SniffedResource(
             url: pageURL.absoluteString,
             host: pageURL.host ?? "",
@@ -1923,6 +1927,7 @@ private enum ExternalDownloadRequestCenter {
             headers: result.headers,
             cookie: result.cookie,
             engine: result.engine,
+            mediaFormatSummary: result.mediaFormatSummary,
             startImmediately: result.startImmediately
         ) else {
             return
@@ -1957,6 +1962,7 @@ private struct DownloadConfirmationResult {
     let headers: [String: String]
     let cookie: String?
     let engine: DownloadEngineChoice
+    let mediaFormatSummary: String
     let startImmediately: Bool
 }
 
@@ -2261,6 +2267,7 @@ private struct MainWindow: View {
             headers: result.headers,
             cookie: result.cookie,
             engine: result.engine,
+            mediaFormatSummary: result.mediaFormatSummary,
             startImmediately: result.startImmediately
         ) else {
             showInDevelopment("这个链接暂时不能下载：\(result.url)")
@@ -2942,8 +2949,8 @@ private final class DownloadConfirmationWindowController: NSWindowController, NS
             )
         )
         window.contentViewController = hostingController
-        window.setContentSize(NSSize(width: 720, height: 510))
-        window.minSize = NSSize(width: 680, height: 460)
+        window.setContentSize(NSSize(width: 720, height: 560))
+        window.minSize = NSSize(width: 680, height: 520)
         super.init(window: window)
         window.delegate = self
     }
@@ -4716,6 +4723,8 @@ private struct AddDownloadSheet: View {
     @State private var isChecking = false
     @State private var metadataMessage: String?
     @State private var sitePresetMessage: String?
+    @State private var mediaQualityMessage: String?
+    @State private var isCheckingMediaQuality = false
 
     init(
         request: DownloadConfirmationRequest,
@@ -4773,6 +4782,20 @@ private struct AddDownloadSheet: View {
                     fieldLabel(L.t("Size", "大小"))
                     Text(size)
                         .foregroundStyle(size == "Unknown" ? .secondary : .primary)
+                }
+                GridRow {
+                    fieldLabel(L.t("Quality", "清晰度"))
+                    HStack(spacing: 8) {
+                        if isCheckingMediaQuality {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(mediaQualityMessage ?? L.t("Not detected yet", "尚未检测"))
+                            .foregroundStyle(mediaQualityMessage == nil ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(width: 520, alignment: .leading)
+                    }
                 }
                 GridRow {
                     fieldLabel(L.t("Category", "分类"))
@@ -4870,6 +4893,7 @@ private struct AddDownloadSheet: View {
                         headers: headers,
                         cookie: request.cookie,
                         engine: engine,
+                        mediaFormatSummary: mediaQualityMessage ?? "",
                         startImmediately: startImmediately
                     ))
                     onCancel()
@@ -4943,13 +4967,97 @@ private struct AddDownloadSheet: View {
             if let normalizedURL = draft.normalizedURL, let preset = DownloadManager.sitePreset(for: normalizedURL) {
                 engine = preset.engine
                 sitePresetMessage = sitePresetDescription(preset)
+                Task { await refreshMediaQuality(for: normalizedURL) }
             } else {
                 if engine == .automatic || engine == .ytdlp {
                     engine = AppPreferences.defaultEngine
                 }
                 sitePresetMessage = nil
+                mediaQualityMessage = nil
             }
             metadataMessage = draft.errorMessage.map { "\(L.t("Size check unavailable", "无法探测大小")): \(L.runtime($0))" }
+        }
+    }
+
+    private func refreshMediaQuality(for sourceURL: URL) async {
+        guard DownloadManager.shouldUseYTDLPHost(sourceURL) else { return }
+        await MainActor.run {
+            isCheckingMediaQuality = true
+            mediaQualityMessage = L.t("Detecting selected quality...", "正在检测将下载的清晰度...")
+        }
+
+        let summary = await Self.detectYTDLPSelectedQuality(
+            sourceURL: sourceURL,
+            headers: request.headers,
+            cookie: request.cookie
+        )
+
+        await MainActor.run {
+            isCheckingMediaQuality = false
+            mediaQualityMessage = summary ?? L.t("Unable to detect before download. Check browser login/cookie access.", "下载前无法检测，请检查浏览器登录状态或 Cookie 访问权限。")
+        }
+    }
+
+    private static func detectYTDLPSelectedQuality(sourceURL: URL, headers: [String: String], cookie: String?) async -> String? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                var arguments = [
+                    "yt-dlp",
+                    "--simulate",
+                    "--no-warnings",
+                    "--print", "FNDM_SELECTED_FORMAT:%(format_id)s\t%(format_note)s\t%(resolution)s\t%(height)s\t%(vcodec)s\t%(acodec)s"
+                ]
+                if let playlistItems = headers[DownloadManager.ytdlpPlaylistItemsHeaderKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !playlistItems.isEmpty {
+                    arguments.append(contentsOf: ["--playlist-items", playlistItems])
+                } else if DownloadManager.isBilibiliURL(sourceURL),
+                          let playlistItems = DownloadManager.bilibiliPlaylistItems(from: sourceURL) {
+                    arguments.append(contentsOf: ["--playlist-items", playlistItems])
+                }
+                if let format = headers[DownloadManager.ytdlpFormatHeaderKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !format.isEmpty {
+                    arguments.append(contentsOf: ["-f", format])
+                }
+                if let cookie, !cookie.isEmpty {
+                    arguments.append(contentsOf: ["--add-header", "Cookie:\(cookie)"])
+                }
+                if DownloadManager.isBilibiliURL(sourceURL),
+                   let browserCookies = DownloadManager.defaultBrowserCookieSourceForYTDLP() {
+                    arguments.append(contentsOf: ["--cookies-from-browser", browserCookies])
+                }
+                if let userAgent = headers["User-Agent"] {
+                    arguments.append(contentsOf: ["--user-agent", userAgent])
+                }
+                if let referer = headers["Referer"] {
+                    arguments.append(contentsOf: ["--referer", referer])
+                }
+                arguments.append(sourceURL.absoluteString)
+                process.arguments = arguments
+                process.environment = [
+                    "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                    "HOME": FileManager.default.homeDirectoryForCurrentUser.path
+                ]
+
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let text = String(data: data, encoding: .utf8) ?? ""
+                    let summary = text
+                        .split(whereSeparator: \.isNewline)
+                        .map(String.init)
+                        .compactMap(DownloadManager.parseYTDLPSelectedFormat)
+                        .first
+                    continuation.resume(returning: summary)
+                } catch {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 
@@ -5712,6 +5820,9 @@ private struct DownloadStatusPanel: View {
                     }
                     detailRow(L.t("Status", "状态"), L.runtime(download.detail), highlight: download.status == .downloading)
                     detailRow(L.t("File size", "文件大小"), L.runtime(download.size))
+                    if !download.mediaFormatSummary.isEmpty {
+                        detailRow(L.t("Media quality", "媒体清晰度"), download.mediaFormatSummary)
+                    }
                     detailRow(L.t("Downloaded", "已下载"), "\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) [ \(Int(download.progress * 100))% ]")
                     detailRow(L.t("Transfer rate", "传输速度"), L.runtime(download.speed))
                     detailRow(L.t("Time left", "剩余时间"), L.runtime(download.eta))

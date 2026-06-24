@@ -36,6 +36,7 @@ For the packaged `.app`, use `Packaging/FastNativeDownloadManager-Info.plist` so
 - Monitors the clipboard for downloadable HTTP/HTTPS links and prompts with "Detected downloadable link".
 - Automatically categorizes downloads as Video, Audio, Archive, App, or Document based on file extension and disposition hints.
 - Accepts external browser downloads through the local bridge at `127.0.0.1:51237`.
+- Supports Bilibili video pages through the yt-dlp site preset, including `BV`/`av` URLs, `b23.tv` short links, browser cookies, and `?p=` part selection such as `?p=1`, `?p=1-3`, `?p=1-`, or `?p=-3`.
 
 ## Browser Extension
 

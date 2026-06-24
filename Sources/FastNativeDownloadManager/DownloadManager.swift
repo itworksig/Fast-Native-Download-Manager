@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import CryptoKit
 @preconcurrency import Darwin
@@ -237,6 +238,11 @@ private final class ExternalProcessWaitState: @unchecked Sendable {
     var didResume = false
 }
 
+private final class AudioTrackProbeState: @unchecked Sendable {
+    let lock = NSLock()
+    var hasAudio = false
+}
+
 private enum RuntimePluginSecurityPolicy {
     static func validate(_ manifest: RuntimePluginManifest, command: String) throws {
         let permissions = Set(manifest.permissions ?? [])
@@ -310,6 +316,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
     static let mediaAudioURLHeaderKey = "X-FNDM-Media-Audio-URL"
     static let mediaSubtitleURLHeaderKey = "X-FNDM-Media-Subtitle-URL"
     static let ytdlpFormatHeaderKey = "X-FNDM-YTDLP-Format"
+    static let ytdlpPlaylistItemsHeaderKey = "X-FNDM-YTDLP-Playlist-Items"
     static let sitePresetHeaderKey = "X-FNDM-Site-Preset"
     static let pluginIDHeaderKey = "X-FNDM-Plugin-ID"
     @Published var maximumConcurrentDownloads = max(1, min(16, UserDefaults.standard.object(forKey: "Options.maximumConcurrentDownloads") as? Int ?? 2)) {
@@ -403,6 +410,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         headers customHeaders: [String: String] = [:],
         cookie customCookie: String? = nil,
         engine: DownloadEngineChoice = .automatic,
+        mediaFormatSummary: String = "",
         startImmediately: Bool = true
     ) -> DownloadItem? {
         guard let sourceURL = Self.normalizedURL(from: rawURL) else { return nil }
@@ -433,6 +441,11 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
                 headers[Self.engineHeaderKey] = preset.engine.rawValue
             }
             headers[Self.ytdlpFormatHeaderKey] = headers[Self.ytdlpFormatHeaderKey] ?? preset.ytdlpFormat
+            if Self.isBilibiliURL(sourceURL),
+               headers[Self.ytdlpPlaylistItemsHeaderKey]?.nilIfEmpty == nil,
+               let playlistItems = Self.bilibiliPlaylistItems(from: sourceURL) {
+                headers[Self.ytdlpPlaylistItemsHeaderKey] = playlistItems
+            }
         }
         let cookie = customCookie?.nilIfEmpty ?? HTTPCookieStorage.shared.cookies(for: sourceURL)?.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         let uniqueDestinationURL = resolvedCategory == .torrent || resolvedCategory == .ed2k
@@ -453,7 +466,8 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             cookie: cookie,
             detail: startImmediately ? "Ready" : "Queued",
             proxyURLString: UserDefaults.standard.string(forKey: "Options.defaultProxy") ?? "",
-            ytdlpFormatCode: headers[Self.ytdlpFormatHeaderKey] ?? ""
+            ytdlpFormatCode: headers[Self.ytdlpFormatHeaderKey] ?? "",
+            mediaFormatSummary: mediaFormatSummary
         )
         appendLog(item, "Created task for \(sourceURL.absoluteString)")
         if let preset = headers[Self.sitePresetHeaderKey] {
@@ -862,9 +876,12 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             throw DownloadEngineError.externalToolMissing("yt-dlp is not installed.")
         }
 
-        let outputTemplate = Self.externalOutputTemplate(for: item.destinationURL, preferredExtension: "mp4")
+        let playlistItems = item.headers[Self.ytdlpPlaylistItemsHeaderKey]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let isBilibiliPlaylist = Self.isBilibiliURL(sourceURL) && (playlistItems.isEmpty || playlistItems.contains(":") || playlistItems.contains(","))
+        let outputTemplate = isBilibiliPlaylist
+            ? Self.externalPlaylistOutputTemplate(for: item.destinationURL, preferredExtension: "mp4")
+            : Self.externalOutputTemplate(for: item.destinationURL, preferredExtension: "mp4")
         var arguments = [
-            "--no-playlist",
             "--newline",
             "--progress",
             "--merge-output-format", "mp4",
@@ -873,6 +890,14 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             "-o", outputTemplate,
             sourceURL.absoluteString
         ]
+        if Self.isBilibiliURL(sourceURL) {
+            if !playlistItems.isEmpty {
+                arguments.insert(contentsOf: ["--playlist-items", playlistItems], at: arguments.count - 1)
+            }
+            appendLog(item, playlistItems.isEmpty ? "Bilibili playlist mode: all parts" : "Bilibili playlist items: \(playlistItems)")
+        } else {
+            arguments.insert("--no-playlist", at: 0)
+        }
         let selectedFormat = item.ytdlpFormatCode.trimmingCharacters(in: .whitespacesAndNewlines)
         arguments.insert(contentsOf: ["-f", selectedFormat.isEmpty ? "bv*+ba/b" : selectedFormat], at: arguments.count - 1)
         if let cookie = item.cookie, !cookie.isEmpty {
@@ -889,6 +914,10 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
            browserCookies != "None" {
             arguments.insert(contentsOf: ["--cookies-from-browser", browserCookies.lowercased()], at: arguments.count - 1)
             appendLog(item, "yt-dlp cookies from browser: \(browserCookies)")
+        } else if Self.isBilibiliURL(sourceURL),
+                  let browserCookies = Self.defaultBrowserCookieSourceForYTDLP() {
+            arguments.insert(contentsOf: ["--cookies-from-browser", browserCookies], at: arguments.count - 1)
+            appendLog(item, "yt-dlp Bilibili cookie fallback from browser: \(browserCookies)")
         }
         if let userAgent = item.headers["User-Agent"] {
             arguments.insert(contentsOf: ["--user-agent", userAgent], at: arguments.count - 1)
@@ -909,6 +938,11 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         if !item.proxyURLString.isEmpty {
             arguments.insert(contentsOf: ["--proxy", item.proxyURLString], at: arguments.count - 1)
         }
+        if Self.isBilibiliURL(sourceURL) {
+            if await ensureAria2CForBilibiliIfNeeded(item: item) {
+                appendLog(item, "aria2c is available. Bilibili uses yt-dlp's built-in DASH downloader to preserve audio/video merge.")
+            }
+        }
 
         try await runExternalMediaTool(
             item: item,
@@ -918,6 +952,75 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             preferredExtension: "mp4",
             progressParser: Self.parseYTDLPProgress
         )
+    }
+
+    private func ensureAria2CForBilibiliIfNeeded(item: DownloadItem) async -> Bool {
+        if Self.executablePath(named: "aria2c") != nil {
+            return true
+        }
+
+        guard let brewPath = Self.executablePath(named: "brew") else {
+            DispatchQueue.main.async {
+                self.appendLog(item, "aria2c is missing and Homebrew was not found; continuing with yt-dlp's built-in downloader.")
+            }
+            return false
+        }
+
+        DispatchQueue.main.async {
+            item.detail = "Installing aria2c with Homebrew..."
+            item.speed = "Installing..."
+            self.appendLog(item, "aria2c is missing. Installing aria2 with Homebrew...")
+            self.store.upsert(item)
+            self.objectWillChange.send()
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: brewPath)
+        process.arguments = ["install", "aria2"]
+        process.environment = [
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+            "HOMEBREW_NO_AUTO_UPDATE": "1"
+        ]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        let readability = pipe.fileHandleForReading
+        readability.readabilityHandler = { [weak self, weak item] handle in
+            guard let self, let item else { return }
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            for line in text.split(whereSeparator: \.isNewline).map(String.init) {
+                DispatchQueue.main.async {
+                    self.appendLog(item, "brew: \(line)")
+                }
+            }
+        }
+
+        do {
+            try process.run()
+            await withCheckedContinuation { continuation in
+                process.terminationHandler = { _ in continuation.resume() }
+            }
+        } catch {
+            readability.readabilityHandler = nil
+            DispatchQueue.main.async {
+                self.appendLog(item, "Unable to install aria2: \(error.localizedDescription)")
+            }
+            return false
+        }
+
+        readability.readabilityHandler = nil
+        let installed = process.terminationStatus == 0 && Self.executablePath(named: "aria2c") != nil
+        DispatchQueue.main.async {
+            if installed {
+                self.appendLog(item, "aria2c installed successfully.")
+            } else {
+                self.appendLog(item, "Homebrew could not install aria2; continuing with yt-dlp's built-in downloader.")
+            }
+        }
+        return installed
     }
 
     private func downloadWithFFmpeg(item: DownloadItem, sourceURL: URL) async throws {
@@ -1195,6 +1298,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             let manifestURL = folder.appendingPathComponent("plugin.json")
             guard let data = try? Data(contentsOf: manifestURL),
                   let manifest = try? JSONDecoder().decode(RuntimePluginManifest.self, from: data),
+                  manifest.kind?.lowercased() != "extractor",
                   !disabledIDs.contains(manifest.id),
                   trustedIDs.contains(manifest.id) || manifest.id.hasPrefix("builtin."),
                   manifest.engineCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
@@ -1216,6 +1320,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             guard let data = try? Data(contentsOf: manifestURL),
                   let manifest = try? JSONDecoder().decode(RuntimePluginManifest.self, from: data),
                   manifest.id == pluginID,
+                  manifest.kind?.lowercased() != "extractor",
                   !disabledIDs.contains(manifest.id),
                   trustedIDs.contains(manifest.id) || manifest.id.hasPrefix("builtin."),
                   manifest.engineCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
@@ -1402,6 +1507,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         progressParser: @escaping @Sendable (String) -> ExternalToolProgress?
     ) async throws {
         try? FileManager.default.removeItem(at: item.destinationURL)
+        Self.removeYTDLPIntermediateFiles(for: item.destinationURL)
         let startingSnapshot = Self.directorySnapshot(item.destinationURL.deletingLastPathComponent())
 
         let process = Process()
@@ -1435,6 +1541,17 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             for line in text.split(whereSeparator: \.isNewline).map(String.init) {
+                if label == "yt-dlp", let formatSummary = Self.parseYTDLPSelectedFormat(line) {
+                    DispatchQueue.main.async {
+                        item.mediaFormatSummary = formatSummary
+                        item.detail = "yt-dlp selected \(formatSummary)"
+                        self.appendLog(item, "yt-dlp: selected \(formatSummary)")
+                        item.updatedAt = Date()
+                        self.store.upsert(item)
+                        self.objectWillChange.send()
+                    }
+                    continue
+                }
                 if let progress = progressParser(line) {
                     DispatchQueue.main.async {
                         item.progress = max(item.progress, progress.percent ?? item.progress)
@@ -1470,6 +1587,11 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async {
                 self.appendLog(item, "\(label) exited with code \(process.terminationStatus)")
             }
+            if label == "yt-dlp",
+               let sourceURL = item.sourceURL,
+               Self.isBilibiliURL(sourceURL) {
+                throw DownloadEngineError.externalToolFailed("Bilibili yt-dlp failed. The site may require browser cookies/login, a fresh URL, or a different format.")
+            }
             throw DownloadEngineError.externalToolFailed("\(label) exited with code \(process.terminationStatus).")
         }
 
@@ -1490,6 +1612,12 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         let finalSize = Self.fileSize(at: finalURL)
         guard finalSize > 0 else {
             throw DownloadEngineError.externalToolFailed("\(label) finished but no output file was created.")
+        }
+        if label == "yt-dlp",
+           item.mediaFormatSummary.contains("+"),
+           !Self.mediaFileHasAudioTrack(finalURL) {
+            try? FileManager.default.removeItem(at: finalURL)
+            throw DownloadEngineError.externalToolFailed("yt-dlp finished without an audio track. The selected Bilibili format did not merge video and audio correctly.")
         }
 
         DispatchQueue.main.async {
@@ -1986,6 +2114,9 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         }
         if lowered.contains("yt-dlp") && lowered.contains("exited with code") {
             return "yt-dlp could not download this link. The site may require cookies/login, a fresh URL, or another format."
+        }
+        if lowered.contains("http error 412") || lowered.contains("precondition failed") {
+            return "Bilibili rejected the request (HTTP 412). Use browser cookies/login, then retry this task."
         }
         if lowered.contains("ffmpeg") && lowered.contains("exited with code") {
             return "ffmpeg could not process this media stream. Try another HLS/DASH variant or refresh the page."
@@ -2748,12 +2879,65 @@ extension DownloadManager {
             return isIMDbVideoURL(url)
         }
         let mediaHosts = [
-            "youtube.com", "youtu.be", "bilibili.com", "vimeo.com",
+            "youtube.com", "youtu.be", "bilibili.com", "b23.tv", "vimeo.com",
             "x.com", "twitter.com", "instagram.com", "tiktok.com",
             "facebook.com", "fb.watch", "twitch.tv", "dailymotion.com", "dai.ly",
             "reddit.com", "redd.it", "soundcloud.com", "pinterest.com", "linkedin.com"
         ]
         return mediaHosts.contains { host == $0 || host.hasSuffix(".\($0)") }
+    }
+
+    static func isBilibiliURL(_ url: URL) -> Bool {
+        let host = url.host()?.lowercased() ?? ""
+        return host == "b23.tv" || host == "bilibili.com" || host.hasSuffix(".bilibili.com")
+    }
+
+    static func bilibiliPlaylistItems(from url: URL) -> String? {
+        guard let rawPart = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name.lowercased() == "p" })?
+            .value?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawPart.isEmpty else {
+            return nil
+        }
+
+        if rawPart.contains("-") {
+            let pieces = rawPart.split(separator: "-", omittingEmptySubsequences: false)
+            guard pieces.count == 2 else { return nil }
+            let start = String(pieces[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let end = String(pieces[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if start.isEmpty, let endNumber = Int(end), endNumber > 0 {
+                return ":\(endNumber)"
+            }
+            if end.isEmpty, let startNumber = Int(start), startNumber > 0 {
+                return "\(startNumber):"
+            }
+            guard let startNumber = Int(start), let endNumber = Int(end), startNumber > 0, endNumber > 0 else {
+                return nil
+            }
+            return startNumber <= endNumber ? "\(startNumber):\(endNumber)" : "\(endNumber):\(startNumber)"
+        }
+
+        guard let partNumber = Int(rawPart), partNumber > 0 else {
+            return nil
+        }
+        return "\(partNumber)"
+    }
+
+    static func defaultBrowserCookieSourceForYTDLP() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates: [(String, String)] = [
+            ("chrome", "Library/Application Support/Google/Chrome"),
+            ("chromium", "Library/Application Support/Chromium"),
+            ("brave", "Library/Application Support/BraveSoftware/Brave-Browser"),
+            ("edge", "Library/Application Support/Microsoft Edge"),
+            ("firefox", "Library/Application Support/Firefox/Profiles"),
+            ("safari", "Library/Safari")
+        ]
+        return candidates.first { _, relativePath in
+            FileManager.default.fileExists(atPath: home.appendingPathComponent(relativePath).path)
+        }?.0
     }
 
     static func isIMDbVideoURL(_ url: URL) -> Bool {
@@ -2769,6 +2953,38 @@ extension DownloadManager {
         let speed = firstRegexCapture(#"at\s+([^\s]+/s)"#, in: line)
         let eta = firstRegexCapture(#"ETA\s+([^\s]+)"#, in: line)
         return ExternalToolProgress(percent: percent, speed: speed, eta: eta)
+    }
+
+    static func parseYTDLPSelectedFormat(_ line: String) -> String? {
+        let prefix = "FNDM_SELECTED_FORMAT:"
+        guard line.hasPrefix(prefix) else { return nil }
+        let fields = String(line.dropFirst(prefix.count)).components(separatedBy: "\t")
+        guard !fields.isEmpty else { return nil }
+        let id = fields[safe: 0]?.nilIfNA
+        let note = fields[safe: 1]?.nilIfNA
+        let resolution = fields[safe: 2]?.nilIfNA
+        let height = fields[safe: 3].flatMap { Int($0) }
+        let videoCodec = fields[safe: 4]?.nilIfNA
+        let audioCodec = fields[safe: 5]?.nilIfNA
+
+        var parts: [String] = []
+        if let height, height > 0 {
+            parts.append("\(height)p")
+        }
+        if let resolution, !parts.contains(resolution) {
+            parts.append(resolution)
+        }
+        if let note {
+            parts.append(note)
+        }
+        if let id {
+            parts.append("format \(id)")
+        }
+        let codecs = [videoCodec, audioCodec].compactMap { $0 }.joined(separator: " + ")
+        if !codecs.isEmpty {
+            parts.append(codecs)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     static func parseFFmpegProgress(_ line: String) -> ExternalToolProgress? {
@@ -2863,6 +3079,14 @@ extension DownloadManager {
         destinationURL.pathExtension.isEmpty ? destinationURL.path + ".%(ext)s" : destinationURL.path
     }
 
+    static func externalPlaylistOutputTemplate(for destinationURL: URL, preferredExtension: String) -> String {
+        let directory = destinationURL.deletingLastPathComponent()
+        let baseName = sanitizedFileName(destinationURL.deletingPathExtension().lastPathComponent)
+        return directory
+            .appendingPathComponent("\(baseName) - %(playlist_index|single)s - %(title).200B.%(ext)s")
+            .path
+    }
+
     static func resolveExternalOutputURL(
         preferred: URL,
         directory: URL,
@@ -2881,7 +3105,12 @@ extension DownloadManager {
             let growth = max(0, size - (before[path] ?? 0))
             let url = URL(fileURLWithPath: path)
             let name = url.lastPathComponent
-            let matchesName = name == preferredName || name.hasPrefix("\(preferredName).") || name.hasPrefix("\(preferredBase).")
+            guard !isYTDLPIntermediateFileName(name) else { return nil }
+            let matchesName = name == preferredName
+                || name.hasPrefix("\(preferredName).")
+                || name.hasPrefix("\(preferredBase).")
+                || name.hasPrefix("\(preferredBase) - ")
+                || name.hasPrefix("\(preferredBase)_")
             let matchesExtension = preferredExtension.map { url.pathExtension.caseInsensitiveCompare($0) == .orderedSame } ?? false
             guard matchesName || (matchesExtension && growth > 0) else { return nil }
             return (url, size, growth)
@@ -2893,6 +3122,43 @@ extension DownloadManager {
                 return left.size > right.size
             }
             .first?.url ?? preferred
+    }
+
+    static func removeYTDLPIntermediateFiles(for destinationURL: URL) {
+        let directory = destinationURL.deletingLastPathComponent()
+        let base = destinationURL.deletingPathExtension().lastPathComponent
+        guard let urls = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return
+        }
+        for url in urls {
+            let name = url.lastPathComponent
+            let isRelated = name.hasPrefix("\(base).")
+                || name.hasPrefix("\(base) - ")
+                || name.hasPrefix("\(base)_")
+            if isRelated, isYTDLPIntermediateFileName(name) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    static func isYTDLPIntermediateFileName(_ name: String) -> Bool {
+        name.range(of: #"\.f\d+\.[^.]+$"#, options: .regularExpression) != nil
+    }
+
+    static func mediaFileHasAudioTrack(_ url: URL) -> Bool {
+        let asset = AVURLAsset(url: url)
+        let semaphore = DispatchSemaphore(value: 0)
+        let state = AudioTrackProbeState()
+        asset.loadTracks(withMediaType: .audio) { tracks, _ in
+            state.lock.lock()
+            state.hasAudio = !(tracks ?? []).isEmpty
+            state.lock.unlock()
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 5)
+        state.lock.lock()
+        defer { state.lock.unlock() }
+        return state.hasAudio
     }
 
     static func sampleDownloads() -> [DownloadItem] {
@@ -3348,6 +3614,17 @@ extension DownloadManager {
 private extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
+    }
+
+    var nilIfNA: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed == "NA" || trimmed == "N/A" || trimmed == "none" ? nil : trimmed
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
 

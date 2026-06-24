@@ -7,6 +7,7 @@ const EXTRACT_URL = "http://127.0.0.1:51237/extract";
 const ENGINE_HEADER = "X-FNDM-Engine";
 const SITE_PRESET_HEADER = "X-FNDM-Site-Preset";
 const YTDLP_FORMAT_HEADER = "X-FNDM-YTDLP-Format";
+const YTDLP_PLAYLIST_ITEMS_HEADER = "X-FNDM-YTDLP-Playlist-Items";
 const headerHintsByUrl = new Map();
 const sentDownloadIds = new Set();
 const sentResourceUrls = new Set();
@@ -177,6 +178,10 @@ async function buildResource(targetUrl, context = {}) {
     headers[ENGINE_HEADER] = "yt-dlp";
     headers[SITE_PRESET_HEADER] = platform;
     headers[YTDLP_FORMAT_HEADER] = platformFormat(platform);
+    const playlistItems = platformPlaylistItems(targetUrl, platform);
+    if (playlistItems) {
+      headers[YTDLP_PLAYLIST_ITEMS_HEADER] = playlistItems;
+    }
   }
 
   return {
@@ -212,6 +217,10 @@ async function platformPageResource(tab) {
   headers[ENGINE_HEADER] = "yt-dlp";
   headers[SITE_PRESET_HEADER] = platform;
   headers[YTDLP_FORMAT_HEADER] = platformFormat(platform);
+  const playlistItems = platformPlaylistItems(tab.url, platform);
+  if (playlistItems) {
+    headers[YTDLP_PLAYLIST_ITEMS_HEADER] = playlistItems;
+  }
 
   return {
     url: canonicalPlatformUrl(tab.url),
@@ -223,7 +232,7 @@ async function platformPageResource(tab) {
     confidence: 0.99,
     fileName: sanitizeFileName(tab.title || `${platform} video`),
     headers,
-    cookie: await cookieHeaderFor(tab.url),
+    cookie: await cookieHeaderForPlatform(tab.url, platform),
     tabId: tab.id
   };
 }
@@ -432,6 +441,25 @@ async function cookieHeaderFor(targetUrl) {
   }
 }
 
+async function cookieHeaderForPlatform(targetUrl, platform) {
+  const urls = [targetUrl];
+  if (String(platform || "").toLowerCase() === "bilibili") {
+    urls.push("https://www.bilibili.com/");
+  }
+
+  const pairs = new Map();
+  for (const url of urls) {
+    const header = await cookieHeaderFor(url);
+    for (const pair of header.split(";").map((part) => part.trim()).filter(Boolean)) {
+      const name = pair.split("=")[0];
+      if (name && !pairs.has(name)) {
+        pairs.set(name, pair);
+      }
+    }
+  }
+  return Array.from(pairs.values()).join("; ");
+}
+
 function notify(title, message) {
   api.notifications.create({
     type: "basic",
@@ -620,6 +648,9 @@ function platformNameForUrl(value) {
     if (host.endsWith(".bilibili.com")) {
       return "bilibili";
     }
+    if (host === "b23.tv") {
+      return "bilibili";
+    }
     if (host.endsWith(".vimeo.com")) {
       return "vimeo";
     }
@@ -680,10 +711,56 @@ function canonicalPlatformUrl(value) {
       const id = url.searchParams.get("v");
       return id ? `https://www.youtube.com/watch?v=${id}` : url.href;
     }
+    if (url.hostname.endsWith(".bilibili.com")) {
+      const match = url.pathname.match(/\/video\/((?:BV\w{10})|(?:av\d+))/i);
+      if (match) {
+        const canonical = new URL(`https://www.bilibili.com/video/${match[1]}`);
+        const part = url.searchParams.get("p");
+        if (part) {
+          canonical.searchParams.set("p", part);
+        }
+        return canonical.href;
+      }
+    }
     url.hash = "";
     return url.href;
   } catch {
     return value;
+  }
+}
+
+function platformPlaylistItems(value, platform) {
+  if (String(platform || "").toLowerCase() !== "bilibili") {
+    return "";
+  }
+  try {
+    const part = new URL(value).searchParams.get("p")?.trim();
+    if (!part) {
+      return "";
+    }
+    if (part.includes("-")) {
+      const pieces = part.split("-");
+      if (pieces.length !== 2) {
+        return "";
+      }
+      const start = pieces[0].trim();
+      const end = pieces[1].trim();
+      if (!start && /^\d+$/.test(end)) {
+        return `:${Number(end)}`;
+      }
+      if (!end && /^\d+$/.test(start)) {
+        return `${Number(start)}:`;
+      }
+      if (/^\d+$/.test(start) && /^\d+$/.test(end)) {
+        const left = Number(start);
+        const right = Number(end);
+        return left <= right ? `${left}:${right}` : `${right}:${left}`;
+      }
+      return "";
+    }
+    return /^\d+$/.test(part) ? String(Number(part)) : "";
+  } catch {
+    return "";
   }
 }
 
