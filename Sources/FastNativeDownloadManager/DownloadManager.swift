@@ -815,13 +815,32 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
                 throw DownloadEngineError.http(expiredMessage)
             }
 
-            let avoidRangeRequests = engine == .amazon || Self.shouldAvoidRangeRequests(for: effectiveSourceURL)
-            let metadata = avoidRangeRequests
-                ? DownloadMetadata(contentLength: 0, acceptsRanges: false, responseHeaders: [:])
-                : try await probe(sourceURL: effectiveSourceURL, headers: item.headers, cookie: item.cookie, item: item)
+            let credentiallessGitHubRelease = Self.isGitHubReleaseDownloadURL(effectiveSourceURL)
+            let avoidInitialProbe = engine == .amazon || Self.shouldAvoidRangeRequests(for: effectiveSourceURL)
+            let metadata = avoidInitialProbe
+                ? DownloadMetadata(contentLength: 0, acceptsRanges: false, responseHeaders: [:], finalURL: effectiveSourceURL)
+                : try await probe(
+                    sourceURL: effectiveSourceURL,
+                    headers: item.headers,
+                    cookie: credentiallessGitHubRelease ? nil : item.cookie,
+                    item: credentiallessGitHubRelease ? nil : item,
+                    credentialless: credentiallessGitHubRelease
+                )
+            let downloadURL = metadata.finalURL ?? effectiveSourceURL
+            let avoidRangeRequests = avoidInitialProbe || Self.shouldAvoidRangeRequests(for: downloadURL)
+            let downloadCookie = Self.shouldForwardCredentials(from: effectiveSourceURL, to: downloadURL) ? item.cookie : nil
             appendLog(item, "HTTP probe: size \(metadata.contentLength), ranges \(metadata.acceptsRanges ? "yes" : "no").")
+            if credentiallessGitHubRelease {
+                appendLog(item, "GitHub release asset mode: metadata probe without browser cookies.")
+            }
+            if downloadURL != effectiveSourceURL {
+                appendLog(item, "Resolved final download URL: \(Self.redactedURL(downloadURL))")
+                if item.cookie?.isEmpty == false, downloadCookie == nil {
+                    appendLog(item, "Cookie stripped for cross-host asset request.")
+                }
+            }
             if avoidRangeRequests {
-                appendLog(item, "Amazon/Signed URL mode: skipping HEAD probe and using one plain GET connection.")
+                appendLog(item, "Amazon/Signed URL mode: using one plain GET connection.")
             }
             let resumeSupported = metadata.acceptsRanges && metadata.contentLength > 0 && !avoidRangeRequests
             if !resumeSupported {
@@ -862,7 +881,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             registerPreparedItem(item, fileDescriptor: fd, metadata: metadata)
 
             for segment in segments where !segment.isComplete {
-                startSegment(segment, item: item, sourceURL: effectiveSourceURL, fileDescriptor: fd, resumeSupported: resumeSupported)
+                startSegment(segment, item: item, sourceURL: downloadURL, cookie: downloadCookie, fileDescriptor: fd, resumeSupported: resumeSupported)
             }
         } catch {
             DispatchQueue.main.async {
@@ -1641,19 +1660,27 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func probe(sourceURL: URL, headers: [String: String], cookie: String?, item: DownloadItem? = nil) async throws -> DownloadMetadata {
+    private func probe(sourceURL: URL, headers: [String: String], cookie: String?, item: DownloadItem? = nil, credentialless: Bool = false) async throws -> DownloadMetadata {
         var request = URLRequest(url: sourceURL)
         request.httpMethod = "HEAD"
         request.timeoutInterval = requestTimeout
+        if credentialless {
+            request.httpShouldHandleCookies = false
+        }
         headers
-            .filter { !Self.isInternalHeader($0.key) }
+            .filter { !Self.isInternalHeader($0.key) && (!credentialless || !Self.isCredentialHeader($0.key)) }
             .forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         if let cookie {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
         }
 
         do {
-            let (_, response) = try await (item.map { session(for: $0) } ?? URLSession.shared).data(for: request)
+            let response: URLResponse
+            if credentialless {
+                response = try await Self.headerOnlyResponse(for: request, credentialless: true)
+            } else {
+                (_, response) = try await (item.map { session(for: $0) } ?? URLSession.shared).data(for: request)
+            }
             return try Self.parseMetadataResponse(response, sourceURL: sourceURL)
         } catch let error as DownloadEngineError {
             throw error
@@ -1672,7 +1699,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         if let metadata = try? await rangePreviewProbe(sourceURL: sourceURL, headers: headers, cookie: cookie) {
             return metadata
         }
-        return DownloadMetadata(contentLength: 0, acceptsRanges: false, responseHeaders: [:])
+        return DownloadMetadata(contentLength: 0, acceptsRanges: false, responseHeaders: [:], finalURL: sourceURL)
     }
 
     private func rangePreviewProbe(sourceURL: URL, headers: [String: String], cookie: String?) async throws -> DownloadMetadata {
@@ -1872,7 +1899,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         let responseHeaders = httpResponse.allHeaderFields.reduce(into: [String: String]()) { result, pair in
             result[String(describing: pair.key)] = String(describing: pair.value)
         }
-        return DownloadMetadata(contentLength: contentLength, acceptsRanges: acceptsRanges, responseHeaders: responseHeaders)
+        return DownloadMetadata(contentLength: contentLength, acceptsRanges: acceptsRanges, responseHeaders: responseHeaders, finalURL: httpResponse.url ?? sourceURL)
     }
 
     private static func contentLength(from response: HTTPURLResponse, fallback: Int64) -> Int64 {
@@ -1886,8 +1913,18 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private static func headerOnlyResponse(for request: URLRequest) async throws -> URLResponse {
+        try await headerOnlyResponse(for: request, credentialless: false)
+    }
+
+    private static func headerOnlyResponse(for request: URLRequest, credentialless: Bool) async throws -> URLResponse {
         let delegate = HeaderOnlyProbeDelegate()
-        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        let configuration = URLSessionConfiguration.ephemeral
+        if credentialless {
+            configuration.httpShouldSetCookies = false
+            configuration.httpCookieAcceptPolicy = .never
+            configuration.httpCookieStorage = nil
+        }
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         return try await withCheckedThrowingContinuation { continuation in
             delegate.setContinuation(continuation)
@@ -1895,16 +1932,19 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func startSegment(_ segment: DownloadSegment, item: DownloadItem, sourceURL: URL, fileDescriptor: Int32, resumeSupported: Bool) {
+    private func startSegment(_ segment: DownloadSegment, item: DownloadItem, sourceURL: URL, cookie: String?, fileDescriptor: Int32, resumeSupported: Bool) {
         guard !segment.isComplete else { return }
 
         var request = URLRequest(url: sourceURL)
         request.httpMethod = "GET"
         request.timeoutInterval = TimeInterval(max(1, item.requestTimeoutSeconds))
+        if cookie == nil {
+            request.httpShouldHandleCookies = false
+        }
         item.headers
-            .filter { !Self.isInternalHeader($0.key) }
+            .filter { !Self.isInternalHeader($0.key) && (cookie != nil || !Self.isCredentialHeader($0.key)) }
             .forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
-        if let cookie = item.cookie {
+        if let cookie {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
         }
 
@@ -1917,6 +1957,8 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         let transfer = SegmentTransfer(
             item: item,
             segment: segment,
+            sourceURL: sourceURL,
+            cookie: cookie,
             fileDescriptor: fileDescriptor,
             resumeSupported: resumeSupported,
             limitProvider: { [weak self, weak item] in
@@ -2168,7 +2210,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         lock.unlock()
 
         let retryLimit = max(0, item.retryLimit)
-        guard attempt <= retryLimit, let fd, let sourceURL = item.sourceURL else {
+        guard attempt <= retryLimit, let fd else {
             DispatchQueue.main.async {
                 self.fail(item, message: "\(message). Retried \(min(attempt - 1, retryLimit)) time(s).")
             }
@@ -2204,7 +2246,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
                     self.finishIfNeeded(for: item)
                     return
                 }
-                self.startSegment(currentSegment, item: item, sourceURL: sourceURL, fileDescriptor: fd, resumeSupported: transfer.resumeSupported)
+                self.startSegment(currentSegment, item: item, sourceURL: transfer.sourceURL, cookie: transfer.cookie, fileDescriptor: fd, resumeSupported: transfer.resumeSupported)
             }
         }
     }
@@ -2374,6 +2416,10 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
 }
 
 extension DownloadManager: URLSessionDataDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? {
+        Self.requestStrippingCrossHostCredentials(previousURL: response.url, newRequest: request)
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse) async -> URLSession.ResponseDisposition {
         guard let httpResponse = response as? HTTPURLResponse else {
             return .allow
@@ -2383,7 +2429,7 @@ extension DownloadManager: URLSessionDataDelegate {
         }
 
         if !(200...299).contains(httpResponse.statusCode) {
-            let message = Self.httpFailureMessage(statusCode: httpResponse.statusCode, url: transfer.item.sourceURL)
+            let message = Self.httpFailureMessage(statusCode: httpResponse.statusCode, url: httpResponse.url ?? transfer.sourceURL)
             transfer.markFailure(message, retryable: Self.isRetryableHTTPStatus(httpResponse.statusCode))
             dataTask.cancel()
             return .cancel
@@ -2563,6 +2609,8 @@ extension DownloadManager: URLSessionDataDelegate {
 private final class SegmentTransfer: @unchecked Sendable {
     let item: DownloadItem
     let segmentID: Int
+    let sourceURL: URL
+    let cookie: String?
     let fileDescriptor: Int32
     let resumeSupported: Bool
 
@@ -2577,10 +2625,12 @@ private final class SegmentTransfer: @unchecked Sendable {
     private var failureRetryable = false
     private let limitProvider: () -> Int64
 
-    init(item: DownloadItem, segment: DownloadSegment, fileDescriptor: Int32, resumeSupported: Bool, limitProvider: @escaping () -> Int64) {
+    init(item: DownloadItem, segment: DownloadSegment, sourceURL: URL, cookie: String?, fileDescriptor: Int32, resumeSupported: Bool, limitProvider: @escaping () -> Int64) {
         self.item = item
         self.segment = segment
         self.segmentID = segment.id
+        self.sourceURL = sourceURL
+        self.cookie = cookie
         self.fileDescriptor = fileDescriptor
         self.resumeSupported = resumeSupported
         self.limitProvider = limitProvider
@@ -2697,6 +2747,7 @@ private struct DownloadMetadata: Sendable {
     let contentLength: Int64
     let acceptsRanges: Bool
     let responseHeaders: [String: String]
+    let finalURL: URL?
 }
 
 private final class HeaderOnlyProbeDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
@@ -2712,6 +2763,10 @@ private final class HeaderOnlyProbeDelegate: NSObject, URLSessionDataDelegate, @
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse) async -> URLSession.ResponseDisposition {
         finish(with: .success(response))
         return .cancel
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? {
+        DownloadManager.requestStrippingCrossHostCredentials(previousURL: response.url, newRequest: request)
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -3460,6 +3515,46 @@ extension DownloadManager {
         guard seconds.isFinite, seconds > 0 else { return "--" }
         let total = Int(seconds.rounded())
         return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
+    static func redactedURL(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems,
+              !queryItems.isEmpty else {
+            return url.absoluteString
+        }
+        components.queryItems = queryItems.map { URLQueryItem(name: $0.name, value: "<redacted>") }
+        return components.string ?? url.absoluteString
+    }
+
+    static func shouldForwardCredentials(from sourceURL: URL, to requestURL: URL) -> Bool {
+        guard let sourceHost = sourceURL.host?.lowercased(),
+              let requestHost = requestURL.host?.lowercased() else {
+            return true
+        }
+        return sourceHost == requestHost
+    }
+
+    static func isCredentialHeader(_ name: String) -> Bool {
+        let lowered = name.lowercased()
+        return lowered == "cookie" || lowered == "authorization" || lowered == "proxy-authorization"
+    }
+
+    static func isGitHubReleaseDownloadURL(_ url: URL) -> Bool {
+        guard url.host?.lowercased() == "github.com" else { return false }
+        let components = url.pathComponents.map { $0.lowercased() }
+        guard let releasesIndex = components.firstIndex(of: "releases") else { return false }
+        return components.dropFirst(releasesIndex + 1).contains("download")
+    }
+
+    static func requestStrippingCrossHostCredentials(previousURL: URL?, newRequest request: URLRequest) -> URLRequest {
+        guard let previousURL, !shouldForwardCredentials(from: previousURL, to: request.url ?? previousURL) else {
+            return request
+        }
+        var sanitized = request
+        sanitized.setValue(nil, forHTTPHeaderField: "Cookie")
+        sanitized.setValue(nil, forHTTPHeaderField: "Authorization")
+        return sanitized
     }
 
     static func httpFailureMessage(statusCode: Int, url: URL?) -> String {
