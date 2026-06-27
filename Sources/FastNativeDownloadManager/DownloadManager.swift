@@ -2012,6 +2012,9 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func finishIfNeeded(for item: DownloadItem) {
+        guard item.status != .complete && item.status != .verifying else {
+            return
+        }
         guard let totalBytes = item.totalBytes, totalBytes > 0, item.segments.allSatisfy(\.isComplete) else {
             return
         }
@@ -2041,6 +2044,11 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
 
             let actualPartialSize = Self.fileSize(at: item.tempURL)
             guard actualPartialSize == totalBytes else {
+                let finalSize = Self.fileSize(at: item.destinationURL)
+                if finalSize == totalBytes && !FileManager.default.fileExists(atPath: item.tempURL.path) {
+                    markComplete(item, downloadedBytes: totalBytes, detail: "Saved to \(item.destinationURL.path)")
+                    return
+                }
                 throw DownloadEngineError.sizeMismatch(expected: totalBytes, actual: actualPartialSize, path: item.tempURL.path)
             }
 
@@ -2053,22 +2061,7 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
                 throw DownloadEngineError.sizeMismatch(expected: totalBytes, actual: finalSize, path: item.destinationURL.path)
             }
 
-            item.status = .complete
-            item.progress = 1
-            item.downloadedBytes = totalBytes
-            item.speed = "--"
-            item.eta = "--"
-            item.connections = 0
-            item.detail = "Merged and saved to \(item.destinationURL.path)"
-            item.updatedAt = Date()
-            queuedItemIDs.remove(item.id)
-            retryAttemptsBySegment = retryAttemptsBySegment.filter { $0.key.itemID != item.id }
-            appendLog(item, "Complete. Saved to \(item.destinationURL.path)")
-            store.upsert(item)
-            store.saveSegments(item)
-            objectWillChange.send()
-            runCompletionActions(for: item)
-            scheduleQueue()
+            markComplete(item, downloadedBytes: totalBytes, detail: "Merged and saved to \(item.destinationURL.path)")
         } catch {
             fail(item, message: error.localizedDescription)
         }
@@ -2100,30 +2093,21 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
             try FileManager.default.moveItem(at: item.tempURL, to: item.destinationURL)
             let finalSize = Self.fileSize(at: item.destinationURL)
 
-            item.status = .complete
-            item.progress = 1
-            item.downloadedBytes = finalSize
-            item.totalBytes = finalSize
-            item.size = Self.byteCount(finalSize)
-            item.speed = "--"
-            item.eta = "--"
-            item.connections = 0
-            item.detail = "Saved to \(item.destinationURL.path)"
-            item.updatedAt = Date()
-            queuedItemIDs.remove(item.id)
-            retryAttemptsBySegment = retryAttemptsBySegment.filter { $0.key.itemID != item.id }
-            appendLog(item, "Complete. Saved to \(item.destinationURL.path)")
-            store.upsert(item)
-            store.saveSegments(item)
-            objectWillChange.send()
-            runCompletionActions(for: item)
-            scheduleQueue()
+            markComplete(item, downloadedBytes: finalSize, detail: "Saved to \(item.destinationURL.path)")
         } catch {
             fail(item, message: error.localizedDescription)
         }
     }
 
     private func fail(_ item: DownloadItem, message: String) {
+        if let expected = item.totalBytes,
+           expected > 0,
+           Self.fileSize(at: item.destinationURL) == expected {
+            appendLog(item, "Ignoring late failure because final file size verified: \(message)")
+            markComplete(item, downloadedBytes: expected, detail: "Saved to \(item.destinationURL.path)")
+            return
+        }
+
         let friendlyMessage = Self.friendlyFailureMessage(message)
         queuedItemIDs.remove(item.id)
         cancelTasks(for: item, closingAs: .failed, removePartial: false)
@@ -2136,6 +2120,27 @@ final class DownloadManager: NSObject, ObservableObject, @unchecked Sendable {
         store.saveSegments(item)
         notify(title: "Download Failed", body: "\(item.fileName): \(friendlyMessage)", identifier: "\(item.id.uuidString)-failed")
         objectWillChange.send()
+        scheduleQueue()
+    }
+
+    private func markComplete(_ item: DownloadItem, downloadedBytes: Int64, detail: String) {
+        item.status = .complete
+        item.progress = 1
+        item.downloadedBytes = downloadedBytes
+        item.totalBytes = downloadedBytes
+        item.size = Self.byteCount(downloadedBytes)
+        item.speed = "--"
+        item.eta = "--"
+        item.connections = 0
+        item.detail = detail
+        item.updatedAt = Date()
+        queuedItemIDs.remove(item.id)
+        retryAttemptsBySegment = retryAttemptsBySegment.filter { $0.key.itemID != item.id }
+        appendLog(item, "Complete. Saved to \(item.destinationURL.path)")
+        store.upsert(item)
+        store.saveSegments(item)
+        objectWillChange.send()
+        runCompletionActions(for: item)
         scheduleQueue()
     }
 
